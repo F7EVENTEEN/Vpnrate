@@ -41,12 +41,17 @@ func main() {
 	dataDir := flag.String("data", defaultDataDir(), "where history is stored")
 	noAutostart := flag.Bool("no-autostart", false, "do not register autostart on first run")
 	showVersion := flag.Bool("version", false, "print version")
+	demo := flag.Bool("demo", false, "serve the dashboard with fake data (no network access)")
 	flag.Parse()
 	// Stay small: collect more eagerly and hand memory back to the OS.
 	debug.SetGCPercent(50)
 	debug.SetMemoryLimit(24 << 20)
 	if *showVersion {
 		fmt.Println("vpnrate", version)
+		return
+	}
+	if *demo {
+		runDemo(*port)
 		return
 	}
 

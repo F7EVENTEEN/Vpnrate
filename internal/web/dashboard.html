@@ -52,10 +52,11 @@ ul.pen li b { color: var(--bad); font-variant-numeric: tabular-nums; }
 .row .name { font-weight: 600; min-width: 80px; }
 .row .det { color: var(--muted); font-size: 12px; }
 .wide { grid-column: 1 / -1; }
+@media (min-width: 1000px) { .span2 { grid-column: span 2; } }
 .strip { display: flex; gap: 2px; height: 34px; align-items: stretch; }
 .strip i { flex: 1; border-radius: 2px; background: var(--line); }
 .axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: 4px; }
-svg.spark { width: 100%; height: 70px; display: block; margin-top: 12px; }
+svg.spark { width: 100%; height: 80px; display: block; margin-top: 14px; }
 .stats { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 12px; }
 .stats div b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
 .ev { font-size: 13px; max-height: 320px; overflow: auto; }
@@ -100,7 +101,7 @@ footer a { color: inherit; }
       <h2 data-t="leaks">Leaks</h2>
       <div id="leaks"></div>
     </section>
-    <section class="card">
+    <section class="card span2">
       <h2 data-t="events">Events</h2>
       <div class="ev" id="events"></div>
     </section>
@@ -111,7 +112,7 @@ footer a { color: inherit; }
       <div class="strip" id="strip"></div>
       <div class="axis"><span>−24h</span><span>−18h</span><span>−12h</span><span>−6h</span><span data-t="now">now</span></div>
       <svg class="spark" id="spark" preserveAspectRatio="none"></svg>
-      <div class="sub" data-t="latency">TCP handshake latency, ms (per minute avg)</div>
+      <div class="sub"><span data-t="latency">TCP handshake latency, ms (per minute avg)</span> <span id="sparkMax"></span></div>
     </section>
   </div>
   <footer><span data-t="foot">Everything stays on this computer. Ratings are an open heuristic, not a guarantee.</span></footer>
@@ -230,14 +231,17 @@ function renderSamples(samples) {
 
   const pts = samples.filter(m => m.ok > 0).map(m => [new Date(m.t).getTime(), m.avg_ms]);
   const svg = $('spark');
-  if (pts.length < 2) { svg.innerHTML = ''; return; }
-  const W = 1000, H = 70, x0 = now - 24 * 3600e3;
+  if (pts.length < 2) { svg.innerHTML = ''; $('sparkMax').textContent = ''; return; }
+  const W = 1000, H = 80, x0 = now - 24 * 3600e3;
   const sorted = pts.map(p => p[1]).sort((a, b) => a - b);
-  const ymax = Math.max(sorted[Math.floor(sorted.length * 0.98)] || 1, 10);
-  const d = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${((x - x0) / (now - x0) * W).toFixed(1)},${(H - Math.min(y, ymax) / ymax * (H - 4)).toFixed(1)}`).join('');
+  const ymax = Math.max(sorted[Math.floor(sorted.length * 0.98)] || 1, 10) * 1.15;
+  const X = x => ((x - x0) / (now - x0) * W).toFixed(1), Y = y => (H - Math.min(y, ymax) / ymax * (H - 2)).toFixed(1);
+  const line = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${X(x)},${Y(y)}`).join('');
+  const area = `${line}L${X(pts[pts.length - 1][0])},${H}L${X(pts[0][0])},${H}Z`;
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  svg.innerHTML = `<path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
-    <text x="4" y="12" font-size="11" fill="var(--muted)">${Math.round(ymax)} ms</text>`;
+  svg.innerHTML = `<path d="${area}" fill="var(--accent)" opacity=".12"/>
+    <path d="${line}" fill="none" stroke="var(--accent)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`;
+  $('sparkMax').textContent = `· max ${Math.round(sorted[sorted.length - 1])} ms`;
 }
 
 function renderEvents(ev) {
