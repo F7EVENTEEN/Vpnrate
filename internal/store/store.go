@@ -37,6 +37,8 @@ type MinuteSample struct {
 	OK     int       `json:"ok"`
 	AvgMs  float64   `json:"avg_ms"`
 	P95Ms  float64   `json:"p95_ms"`
+	// Profile is the exit network the minute was spent on (e.g. "AS14061-NL").
+	Profile string `json:"profile,omitempty"`
 }
 
 type Store struct {
@@ -148,6 +150,31 @@ func (s *Store) Prune(now time.Time, keep time.Duration) error {
 	}
 	f.Close()
 	return os.Rename(tmp, s.eventsPath())
+}
+
+// SaveJSON atomically writes v to name inside the data directory.
+func (s *Store) SaveJSON(name string, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path := filepath.Join(s.dir, name)
+	if err := os.WriteFile(path+".tmp", b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(path+".tmp", path)
+}
+
+func (s *Store) LoadJSON(name string, v any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := os.ReadFile(filepath.Join(s.dir, name))
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(b, v)
 }
 
 func readLines[T any](path string, fn func(T)) error {

@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/monitor"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/store"
+	"github.com/F7EVENTEEN/Vpnrate/internal/monitor"
+	"github.com/F7EVENTEEN/Vpnrate/internal/store"
 )
 
 //go:embed dashboard.html
@@ -22,6 +22,7 @@ type Provider interface {
 	Status() monitor.Status
 	Events(since time.Time) []store.Event
 	Samples(hours int) []store.MinuteSample
+	Profiles(days int) []monitor.ProfileStats
 	Recheck()
 	SetBrowserWebRTC(ips []string)
 }
@@ -61,6 +62,10 @@ func Handler(p Provider) http.Handler {
 			s = []store.MinuteSample{}
 		}
 		writeJSON(w, s)
+	})
+	mux.HandleFunc("GET /api/profiles", func(w http.ResponseWriter, r *http.Request) {
+		d, _ := strconv.Atoi(r.URL.Query().Get("days"))
+		writeJSON(w, p.Profiles(min(max(d, 1), 30)))
 	})
 	mux.HandleFunc("POST /api/recheck", func(w http.ResponseWriter, r *http.Request) {
 		p.Recheck()

@@ -9,8 +9,8 @@ import (
 
 	"fyne.io/systray"
 
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/monitor"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/store"
+	"github.com/F7EVENTEEN/Vpnrate/internal/monitor"
+	"github.com/F7EVENTEEN/Vpnrate/internal/store"
 )
 
 type Tray struct {

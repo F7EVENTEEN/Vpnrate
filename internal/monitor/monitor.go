@@ -10,12 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/ipinfo"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/leak"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/netif"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/probe"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/score"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/store"
+	"github.com/F7EVENTEEN/Vpnrate/internal/ipinfo"
+	"github.com/F7EVENTEEN/Vpnrate/internal/leak"
+	"github.com/F7EVENTEEN/Vpnrate/internal/netif"
+	"github.com/F7EVENTEEN/Vpnrate/internal/probe"
+	"github.com/F7EVENTEEN/Vpnrate/internal/score"
+	"github.com/F7EVENTEEN/Vpnrate/internal/store"
 )
 
 const (
@@ -35,6 +35,7 @@ type Deps struct {
 	STUN        func(context.Context) (netip.Addr, error)
 	DNSResolver func(context.Context) (netip.Addr, error)
 	Tunnels     func() ([]netif.Iface, error)
+	Proxy       func() string // system proxy address, "" when none
 	Now         func() time.Time
 	LocalTZ     *time.Location
 }
@@ -58,6 +59,8 @@ type Status struct {
 	Resolver       *ipinfo.Info    `json:"resolver,omitempty"`
 	VPNActive      bool            `json:"vpn_active"`
 	Tunnels        []netif.Iface   `json:"tunnels"`
+	Proxy          string          `json:"proxy,omitempty"`
+	Profile        string          `json:"profile,omitempty"`
 	Leaks          Leaks           `json:"leaks"`
 	Trust          score.Trust     `json:"trust"`
 	Stability      score.Stability `json:"stability"`
@@ -85,6 +88,7 @@ type Monitor struct {
 	lastFull  time.Time
 	leaking   map[string]bool
 	webrtcIPs []netip.Addr
+	profiles  map[string]*Profile
 	subs      []func(store.Event)
 	recheck   chan struct{}
 }
@@ -99,6 +103,7 @@ func New(d Deps, st *store.Store) *Monitor {
 	m := &Monitor{
 		d: d, store: st, det: probe.NewDetector(2),
 		leaking: map[string]bool{}, recheck: make(chan struct{}, 1),
+		profiles: map[string]*Profile{},
 	}
 	m.st.Online = true
 	m.st.Started = d.Now()
@@ -114,6 +119,10 @@ func (m *Monitor) loadHistory() {
 	}
 	if e, err := m.store.Events(since); err == nil {
 		m.recent = e
+	}
+	m.store.LoadJSON(profilesFile, &m.profiles)
+	if m.profiles == nil {
+		m.profiles = map[string]*Profile{}
 	}
 }
 
@@ -189,6 +198,10 @@ func (m *Monitor) forceFull() {
 func (m *Monitor) Tick(ctx context.Context) {
 	ok, lat := m.d.Probe(ctx)
 	tunnels, terr := m.d.Tunnels()
+	proxy := ""
+	if m.d.Proxy != nil {
+		proxy = m.d.Proxy()
+	}
 	now := m.d.Now()
 
 	var evs []store.Event
@@ -200,7 +213,8 @@ func (m *Monitor) Tick(ctx context.Context) {
 				Message: fmt.Sprintf("connection restored after %s", d),
 				Data:    map[string]any{"duration_s": d.Seconds(), "start": tr.Outage.Start}})
 		} else {
-			evs = append(evs, store.Event{Time: tr.At, Kind: store.KindOffline, Message: "connection lost"})
+			evs = append(evs, store.Event{Time: tr.At, Kind: store.KindOffline, Message: "connection lost",
+				Data: map[string]any{"profile": m.st.Profile}})
 		}
 	}
 	m.st.Online = m.det.Online()
@@ -221,19 +235,24 @@ func (m *Monitor) Tick(ctx context.Context) {
 	m.bucket = append(m.bucket, probe.Sample{T: now, OK: ok, Latency: lat})
 
 	if terr == nil {
-		active := len(tunnels) > 0
+		// A route is either a tunnel adapter or a system proxy (proxy-mode clients).
+		active := len(tunnels) > 0 || proxy != ""
 		if m.tunnelsOK && active != m.st.VPNActive {
 			if active {
 				evs = append(evs, store.Event{Time: now, Kind: store.KindVPNUp,
-					Message: "VPN tunnel up: " + names(tunnels)})
+					Message: "VPN up: " + route(tunnels, proxy)})
 			} else {
 				evs = append(evs, store.Event{Time: now, Kind: store.KindVPNDown,
-					Message: "VPN tunnel down: " + names(m.st.Tunnels)})
+					Message: "VPN down: " + route(m.st.Tunnels, m.st.Proxy),
+					Data:    map[string]any{"profile": m.st.Profile}})
 			}
+		} else if m.tunnelsOK && proxy != m.st.Proxy && proxy != "" && m.st.Proxy != "" {
+			m.forceFull()
 		}
 		m.tunnelsOK = true
 		m.st.VPNActive = active
 		m.st.Tunnels = tunnels
+		m.st.Proxy = proxy
 	}
 	m.mu.Unlock()
 
@@ -246,6 +265,16 @@ func (m *Monitor) Tick(ctx context.Context) {
 			break
 		}
 	}
+}
+
+func route(ifs []netif.Iface, proxy string) string {
+	switch {
+	case len(ifs) > 0 && proxy != "":
+		return names(ifs) + " + proxy " + proxy
+	case proxy != "":
+		return "system proxy " + proxy
+	}
+	return names(ifs)
 }
 
 func names(ifs []netif.Iface) string {
@@ -269,7 +298,7 @@ func (m *Monitor) flushLocked() {
 	if len(m.bucket) == 0 {
 		return
 	}
-	s := store.MinuteSample{T: m.minute, Probes: len(m.bucket), P95Ms: ms(probe.P95(m.bucket))}
+	s := store.MinuteSample{T: m.minute, Probes: len(m.bucket), P95Ms: ms(probe.P95(m.bucket)), Profile: m.st.Profile}
 	var sum time.Duration
 	for _, b := range m.bucket {
 		if b.OK {
@@ -351,7 +380,13 @@ func (m *Monitor) CheckIP(ctx context.Context) {
 	l := &m.st.Leaks
 	l.UDP = leak.JudgeUDP(v4, stunIP)
 	l.IPv6 = leak.JudgeIPv6(exit, exit6)
-	if exit != nil && resolver != nil {
+	if exit != nil && resolver != nil && m.st.Proxy != "" && len(m.st.Tunnels) == 0 {
+		// Proxied apps (the browser) resolve names at the proxy; only
+		// proxy-unaware apps use the system resolver checked here.
+		l.DNS = leak.Verdict{Status: leak.Unknown, IP: resolver.IP,
+			Detail: fmt.Sprintf("proxy mode: the browser resolves DNS through the proxy; apps that ignore the proxy use %s (%s)", resolver.IP, resolver.Country)}
+		l.Timezone = leak.JudgeTimezone(exit.Timezone, m.d.LocalTZ, now)
+	} else if exit != nil && resolver != nil {
 		l.DNS = leak.JudgeDNS(*exit, *resolver)
 		l.Timezone = leak.JudgeTimezone(exit.Timezone, m.d.LocalTZ, now)
 	} else {
@@ -364,6 +399,7 @@ func (m *Monitor) CheckIP(ctx context.Context) {
 	m.judgeWebRTCLocked()
 	evs = append(evs, m.leakEventsLocked(now)...)
 	m.recomputeTrustLocked()
+	m.updateProfileLocked(now)
 	m.mu.Unlock()
 	m.emit(evs)
 }
@@ -442,6 +478,7 @@ func (m *Monitor) SetBrowserWebRTC(ips []string) {
 	m.judgeWebRTCLocked()
 	evs := m.leakEventsLocked(m.d.Now())
 	m.recomputeTrustLocked()
+	m.updateProfileLocked(m.d.Now())
 	m.mu.Unlock()
 	m.emit(evs)
 }

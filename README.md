@@ -9,6 +9,8 @@
 A tiny background agent that watches your connection around the clock and tells you how
 **stable** it is and how **clean** your exit IP looks to the websites you care about.
 
+[![CI](https://github.com/F7EVENTEEN/Vpnrate/actions/workflows/ci.yml/badge.svg)](https://github.com/F7EVENTEEN/Vpnrate/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/F7EVENTEEN/Vpnrate?color=22c55e)](https://github.com/F7EVENTEEN/Vpnrate/releases/latest)
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows&logoColor=white)
 ![RAM](https://img.shields.io/badge/RAM-~25%20MB-22c55e)
@@ -44,6 +46,7 @@ VPN Rate stays in the tray and remembers **everything that happens over time**.
 | Counts connection drops and VPN disconnects | ❌ | ✅ |
 | Alerts you the moment a leak appears | ❌ | ✅ |
 | History: when your IP changed and what it looked like | ❌ | ✅ |
+| **Compares your VPNs** side by side | ❌ | ✅ |
 | Open, explainable scoring formula | ❌ | ✅ |
 | Your data never leaves your computer | ❌ | ✅ |
 
@@ -51,6 +54,8 @@ VPN Rate stays in the tray and remembers **everything that happens over time**.
 
 - 📶 **Stability monitoring:** tiny TCP probes every 5 seconds, so every outage is logged with its duration
 - 🔌 **VPN tunnel watch:** spots WireGuard, AmneziaWG, OpenVPN, sing-box, Hiddify, Outline, Wintun/TAP and more, and tells you when one goes down
+- ⚖️ **Compare your VPNs:** each exit network gets its own row with uptime, drops, latency and trust, so after a week you know which VPN is actually better
+- 🧦 **Works with proxy-mode clients** too (v2rayN, Nekoray, Hiddify, Clash without TUN): it follows the Windows system proxy just like your browser does
 - 🕵️ **Leak detection:** DNS, UDP/WebRTC (system-wide and in your browser), IPv6 bypass, timezone mismatch
 - 🏷️ **IP reputation:** datacenter, VPN, proxy, Tor, abuse records, ASN and location, looked up only when your IP changes
 - 🧮 **Two open scores:** Trust and Stability, each deduction listed with its reason
@@ -140,12 +145,12 @@ Starts at **100**, then subtracts:
 
 ## 🚀 Install
 
-**Option 1: download.** Grab `vpnrate.exe` from [Releases](https://github.com/F7EVENTEEN/Vpn_rate_agent/releases) and run it.
+**Option 1: download.** Grab `vpnrate.exe` from [Releases](https://github.com/F7EVENTEEN/Vpnrate/releases) and run it.
 
 **Option 2: Go.**
 
 ```
-go install github.com/F7EVENTEEN/Vpn_rate_agent/cmd/vpnrate@latest
+go install github.com/F7EVENTEEN/Vpnrate/cmd/vpnrate@latest
 ```
 
 A green dot appears in the tray, and clicking it opens the dashboard at <http://127.0.0.1:8737>.
@@ -168,7 +173,7 @@ History lives in `%APPDATA%\vpnrate\` as plain JSON Lines, kept for 30 days.
 ### Build from source
 
 ```
-git clone https://github.com/F7EVENTEEN/Vpn_rate_agent
+git clone https://github.com/F7EVENTEEN/Vpnrate
 cd Vpn_rate_agent
 go test ./...
 go build -ldflags "-s -w -H windowsgui" -o vpnrate.exe ./cmd/vpnrate
@@ -183,6 +188,21 @@ Requires Go 1.26+. No C compiler is needed.
 - VPN Rate **never contacts claude.ai, chatgpt.com or any other AI site**, so it can't send them a request from your real IP while your VPN is down.
 
 ## ❓ FAQ
+
+<details>
+<summary><b>How does it find my VPN? I didn't configure anything.</b></summary>
+<br>Two ways, checked every 5 seconds. <b>TUN mode</b> clients (WireGuard, AmneziaWG, OpenVPN, sing-box…) create a virtual network adapter, which VPN Rate recognises by name, description and interface type. <b>Proxy mode</b> clients (v2rayN, Nekoray…) set the Windows system proxy, which VPN Rate reads and then routes its own checks through, so it sees the same exit as your browser.
+</details>
+
+<details>
+<summary><b>I use several VPNs. Which one does it rate?</b></summary>
+<br>Whichever one your traffic is actually using right now: only one route can carry it at a time. Every exit network (provider ASN + country) automatically becomes a <b>profile</b>, and its minutes, drops, VPN disconnects and trust are recorded separately. Switch VPNs or servers as usual, and the <i>Your connections</i> table compares them. Going without a VPN shows up as a "direct" row.
+</details>
+
+<details>
+<summary><b>Proxy mode: why is UDP flagged as a leak?</b></summary>
+<br>Because it is one. An HTTP/SOCKS system proxy only carries proxy-aware TCP traffic, so UDP (including browser WebRTC) goes out directly and can reveal your real IP. Switch your client to TUN mode, or disable WebRTC in your browser, to fix it.
+</details>
 
 <details>
 <summary><b>Will a high score guarantee I won't get banned?</b></summary>
@@ -215,6 +235,13 @@ Requires Go 1.26+. No C compiler is needed.
 - [ ] More reputation sources (Spamhaus DNSBL and others)
 - [ ] Weekly report export
 - [ ] Signed release builds
+
+## 📦 How releases are built
+
+Releases are not uploaded by hand. Pushing a version tag (`git tag v0.2.0 && git push --tags`) triggers
+[GitHub Actions](.github/workflows/release.yml), which tests and builds `vpnrate.exe` on a clean GitHub
+machine from exactly that source, and attaches it with `SHA256SUMS.txt` to the release. Anyone can
+check in the Actions log that the binary came from this code.
 
 ## 🤝 Contributing
 

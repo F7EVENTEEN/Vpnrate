@@ -1,4 +1,4 @@
-module github.com/F7EVENTEEN/Vpn_rate_agent
+module github.com/F7EVENTEEN/Vpnrate
 
 go 1.26.0
 

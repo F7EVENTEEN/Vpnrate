@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/ipinfo"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/leak"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/netif"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/store"
+	"github.com/F7EVENTEEN/Vpnrate/internal/ipinfo"
+	"github.com/F7EVENTEEN/Vpnrate/internal/leak"
+	"github.com/F7EVENTEEN/Vpnrate/internal/netif"
+	"github.com/F7EVENTEEN/Vpnrate/internal/store"
 )
 
 type fake struct {
@@ -245,5 +245,109 @@ func TestMinuteSamplesAggregate(t *testing.T) {
 	samples := m.Samples(1)
 	if len(samples) != 1 || samples[0].Probes != 12 || samples[0].OK != 11 {
 		t.Fatalf("want one flushed minute with 11/12 ok, got %+v", samples)
+	}
+}
+
+func TestProxyMode(t *testing.T) {
+	f := newFake()
+	f.tunnels = nil
+	f.resolver = "95.167.1.1" // system DNS goes to the ISP, as it does in proxy mode
+	m, evs := newMonitor(t, f)
+	proxy := "127.0.0.1:10809"
+	m.d.Proxy = func() string { return proxy }
+	m.Tick(context.Background())
+	m.CheckIP(context.Background())
+	st := m.Status()
+	if !st.VPNActive || st.Proxy != proxy {
+		t.Fatalf("proxy should count as an active VPN route: %+v", st)
+	}
+	if st.Leaks.DNS.Status != leak.Unknown {
+		t.Fatalf("in proxy mode the browser's DNS is resolved by the proxy, so no DNS verdict: %+v", st.Leaks.DNS)
+	}
+	if st.Trust.Score != 70 {
+		t.Fatalf("trust = %d, want 70 (no dns penalty in proxy mode)", st.Trust.Score)
+	}
+	proxy = ""
+	f.now = f.now.Add(5 * time.Second)
+	m.Tick(context.Background())
+	if !has(*evs, store.KindVPNDown) || m.Status().VPNActive {
+		t.Fatalf("disabling the proxy must be a vpn_down: %v", kinds(*evs))
+	}
+}
+
+func TestProfiles(t *testing.T) {
+	f := newFake()
+	m, _ := newMonitor(t, f)
+	ctx := context.Background()
+	tick := func(ok bool) {
+		f.probeOK = ok
+		m.Tick(ctx)
+		f.now = f.now.Add(5 * time.Second)
+	}
+	// 2 minutes on the NL datacenter VPN, with one outage.
+	m.Tick(ctx)
+	m.CheckIP(ctx)
+	for i := 0; i < 24; i++ {
+		tick(i < 6 || i > 9)
+	}
+	// Switch to the DE residential exit for 1 minute.
+	f.v4, f.stun = "198.51.100.4", "198.51.100.4"
+	m.CheckIP(ctx)
+	for i := 0; i < 13; i++ {
+		tick(true)
+	}
+	ps := m.Profiles(7)
+	if len(ps) != 2 {
+		t.Fatalf("want 2 profiles, got %+v", ps)
+	}
+	byKey := map[string]ProfileStats{}
+	for _, p := range ps {
+		byKey[p.Key] = p
+	}
+	nl, de := byKey["AS14061-NL"], byKey["AS3320-DE"]
+	if nl.Outages != 1 || nl.Trust != 70 || nl.Minutes < 2 || nl.Uptime >= 100 {
+		t.Fatalf("NL profile wrong: %+v", nl)
+	}
+	if de.Outages != 0 || de.Trust != 100 || !de.Current || de.Uptime != 100 {
+		t.Fatalf("DE profile wrong: %+v", de)
+	}
+	if nl.Current {
+		t.Fatal("only one profile is current")
+	}
+	if ps[0].Key != "AS3320-DE" {
+		t.Fatalf("current profile should be listed first: %+v", ps)
+	}
+}
+
+func TestProfilesSurviveRestart(t *testing.T) {
+	f := newFake()
+	dir := t.TempDir()
+	st, _ := store.Open(dir)
+	m := New(f.deps(), st)
+	m.Tick(context.Background())
+	m.CheckIP(context.Background())
+	for i := 0; i < 13; i++ {
+		f.now = f.now.Add(5 * time.Second)
+		m.Tick(context.Background())
+	}
+	st2, _ := store.Open(dir)
+	m2 := New(f.deps(), st2)
+	ps := m2.Profiles(7)
+	if len(ps) != 1 || ps[0].Trust != 70 || ps[0].Label == "" {
+		t.Fatalf("profile metadata must be persisted: %+v", ps)
+	}
+}
+
+// Seen live: sing-box runs a TUN adapter and sets the system proxy at once.
+// The tunnel carries system DNS, so the DNS check stays meaningful.
+func TestTunnelPlusProxyKeepsDNSCheck(t *testing.T) {
+	f := newFake()
+	f.resolver = "95.167.1.1"
+	m, _ := newMonitor(t, f)
+	m.d.Proxy = func() string { return "127.0.0.1:10808" }
+	m.Tick(context.Background())
+	m.CheckIP(context.Background())
+	if st := m.Status(); st.Leaks.DNS.Status != leak.Leak {
+		t.Fatalf("with a tunnel up, a foreign ISP resolver is a real leak: %+v", st.Leaks.DNS)
 	}
 }

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/ipinfo"
+	"github.com/F7EVENTEEN/Vpnrate/internal/ipinfo"
 )
 
 var txid = [12]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}

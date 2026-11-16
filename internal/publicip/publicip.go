@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -33,15 +34,25 @@ type Fetcher struct {
 }
 
 // New returns a fetcher whose connections are pinned to one IP family, so
-// the IPv4 and IPv6 exits are measured separately.
-func New(f Family) *Fetcher {
+// the IPv4 and IPv6 exits are measured separately. When proxy returns a URL,
+// requests go through it (the proxy then picks the family).
+func New(f Family, proxy func() *url.URL) *Fetcher {
 	network, src := "tcp4", DefaultV4Sources
 	if f == V6 {
 		network, src = "tcp6", DefaultV6Sources
 	}
 	d := &net.Dialer{Timeout: 5 * time.Second}
 	tr := &http.Transport{
+		Proxy: func(*http.Request) (*url.URL, error) {
+			if proxy == nil {
+				return nil, nil
+			}
+			return proxy(), nil
+		},
 		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			if proxy != nil && proxy() != nil {
+				return d.DialContext(ctx, "tcp", addr)
+			}
 			return d.DialContext(ctx, network, addr)
 		},
 		TLSHandshakeTimeout: 5 * time.Second,

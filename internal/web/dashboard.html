@@ -63,6 +63,14 @@ svg.spark { width: 100%; height: 80px; display: block; margin-top: 14px; }
 .ev .row { padding: 6px 0; }
 .ev time { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 120px; font-size: 12px; }
 .muted { color: var(--muted); }
+table.prof { width: 100%; border-collapse: collapse; font-size: 13px; }
+.prof th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 0 10px 8px 0; white-space: nowrap; }
+.prof td { padding: 9px 10px 9px 0; border-top: 1px solid var(--line); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.prof td.net { white-space: normal; }
+.prof tr.cur td { background: color-mix(in srgb, var(--good) 7%, transparent); }
+.prof .num2 { font-weight: 700; }
+.badge { font-size: 11px; padding: 1px 6px; border-radius: 5px; color: var(--good); border: 1px solid currentColor; margin-left: 6px; }
+.scroll { overflow-x: auto; }
 footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
 footer a { color: inherit; }
 </style>
@@ -106,6 +114,15 @@ footer a { color: inherit; }
       <div class="ev" id="events"></div>
     </section>
 
+    <section class="card wide" id="profCard" hidden>
+      <h2 data-t="profiles">Your connections, last 7 days</h2>
+      <div class="scroll"><table class="prof"><thead><tr>
+        <th data-t="pNet">Exit network</th><th data-t="pVia">Via</th><th data-t="pTime">Time</th><th data-t="uptimeL">Uptime</th>
+        <th data-t="outages">Drops</th><th data-t="drops">VPN drops</th><th data-t="pLat">Avg latency</th><th>Trust</th>
+      </tr></thead><tbody id="profRows"></tbody></table></div>
+      <div class="sub" id="profHint" style="margin-top:10px"></div>
+    </section>
+
     <section class="card wide">
       <h2 data-t="uptime">Connection, last 24 hours</h2>
       <div class="stats" id="stats"></div>
@@ -125,6 +142,9 @@ const T = RU ? {
   trustSub: 'насколько «чисто» выглядит выход для сайтов', stabSub: 'обрывы, простои, падения туннеля',
   exit: 'Выходной IP', leaks: 'Утечки', uptime: 'Соединение за 24 часа', now: 'сейчас',
   latency: 'Задержка TCP-рукопожатия, мс (среднее за минуту)', events: 'События',
+  profiles: 'Твои подключения за 7 дней', pNet: 'Сеть выхода', pVia: 'Через', pTime: 'Время', pLat: 'Ср. задержка',
+  now2: 'сейчас', direct: 'напрямую', proxyMode: 'Прокси',
+  profHint: 'Переключи VPN или сервер — каждая сеть выхода получит свою строку, и их можно будет сравнить.',
   foot: 'Все данные остаются на этом компьютере. Рейтинг — открытая эвристика, а не гарантия.',
   online: 'В сети', offline: 'Нет сети', vpnOn: 'VPN активен', vpnOff: 'VPN не найден',
   excellent: 'Отлично', good: 'Хорошо', suspicious: 'Подозрительно', high_risk: 'Высокий риск',
@@ -143,6 +163,9 @@ const T = RU ? {
     latency: 'Высокая p95-задержка',
   },
 } : {
+  profiles: 'Your connections, last 7 days', pNet: 'Exit network', pVia: 'Via', pTime: 'Time', pLat: 'Avg latency',
+  now2: 'now', direct: 'direct', proxyMode: 'Proxy',
+  profHint: 'Switch VPNs or servers: each exit network gets its own row so you can compare them.',
   online: 'Online', offline: 'Offline', vpnOn: 'VPN active', vpnOff: 'No VPN tunnel',
   excellent: 'Excellent', good: 'Good', suspicious: 'Suspicious', high_risk: 'High risk',
   noPen: 'No penalties', ip4: 'IPv4', ip6: 'IPv6', loc: 'Location', asn: 'Network', src: 'Source',
@@ -171,7 +194,8 @@ function renderStatus(s) {
   $('online').className = 'pill ' + (s.online ? 'good' : 'bad');
   $('online').textContent = s.online ? `${t('online')} · ${Math.round(s.latency_ms)} ms` : `${t('offline')}`;
   $('vpn').className = 'pill ' + (s.vpn_active ? 'good' : 'unk');
-  $('vpn').textContent = s.vpn_active ? `${t('vpnOn')}: ${(s.tunnels || []).map(x => x.name).join(', ')}` : t('vpnOff');
+  const via = [...(s.tunnels || []).map(x => x.name), ...(s.proxy ? [`${t('proxyMode')} ${s.proxy}`] : [])].join(', ');
+  $('vpn').textContent = s.vpn_active ? `${t('vpnOn')}: ${via}` : t('vpnOff');
   $('updated').textContent = `${t('updated')} ${new Date().toLocaleTimeString()}`;
 
   const tr = s.trust, st = s.stability;
@@ -244,6 +268,27 @@ function renderSamples(samples) {
   $('sparkMax').textContent = `· max ${Math.round(sorted[sorted.length - 1])} ms`;
 }
 
+function dur(min) {
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60), m = min % 60;
+  return h < 48 ? `${h}h ${m ? m + 'm' : ''}`.trim() : `${Math.round(h / 24)}d`;
+}
+
+function renderProfiles(ps) {
+  ps = ps || [];
+  $('profCard').hidden = ps.length === 0;
+  $('profRows').innerHTML = ps.map(p => {
+    const via = p.via === 'direct' ? t('direct') : esc(p.via);
+    return `<tr class="${p.current ? 'cur' : ''}">
+      <td class="net"><b>${esc(p.label)}</b> <span class="muted">${esc(p.country)} · AS${p.asn}</span>${p.current ? `<span class="badge">${t('now2')}</span>` : ''}</td>
+      <td class="muted">${via}</td><td>${dur(p.minutes)}</td>
+      <td style="color:${p.uptime >= 99.9 ? 'var(--good)' : p.uptime >= 99 ? 'var(--warn)' : 'var(--bad)'}">${p.uptime.toFixed(2)}%</td>
+      <td>${p.outages}</td><td>${p.tunnel_drops}</td><td>${p.avg_ms ? Math.round(p.avg_ms) + ' ms' : '—'}</td>
+      <td class="num2" style="color:${color(p.trust)}">${p.trust}</td></tr>`;
+  }).join('');
+  $('profHint').textContent = ps.length === 1 ? t('profHint') : '';
+}
+
 function renderEvents(ev) {
   ev = (ev || []).slice(-200).reverse();
   $('events').innerHTML = ev.length ? ev.map(e => {
@@ -276,8 +321,8 @@ async function refresh() {
 async function refreshSlow() {
   try {
     const since = new Date(Date.now() - 7 * 864e5).toISOString();
-    const [s, ev] = await Promise.all([api('/api/samples?hours=24'), api('/api/events?since=' + encodeURIComponent(since))]);
-    renderSamples(s || []); renderEvents(ev);
+    const [s, ev, ps] = await Promise.all([api('/api/samples?hours=24'), api('/api/events?since=' + encodeURIComponent(since)), api('/api/profiles?days=7')]);
+    renderSamples(s || []); renderEvents(ev); renderProfiles(ps);
   } catch (e) {}
 }
 $('recheck').onclick = async () => { await post('/api/recheck'); webrtcTest().then(refresh); setTimeout(refresh, 4000); setTimeout(refreshSlow, 6000); };

@@ -11,9 +11,9 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/ipinfo"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/publicip"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/score"
+	"github.com/F7EVENTEEN/Vpnrate/internal/ipinfo"
+	"github.com/F7EVENTEEN/Vpnrate/internal/publicip"
+	"github.com/F7EVENTEEN/Vpnrate/internal/score"
 )
 
 type Status string

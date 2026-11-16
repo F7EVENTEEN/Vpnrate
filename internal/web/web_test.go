@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/monitor"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/store"
+	"github.com/F7EVENTEEN/Vpnrate/internal/monitor"
+	"github.com/F7EVENTEEN/Vpnrate/internal/store"
 )
 
 type fakeProvider struct {
@@ -24,8 +24,11 @@ func (f *fakeProvider) Events(since time.Time) []store.Event {
 	return []store.Event{{Kind: store.KindOnline, Time: time.Now()}}
 }
 func (f *fakeProvider) Samples(hours int) []store.MinuteSample { return nil }
-func (f *fakeProvider) Recheck()                               { f.rechecked = true }
-func (f *fakeProvider) SetBrowserWebRTC(ips []string)          { f.webrtc = ips }
+func (f *fakeProvider) Profiles(days int) []monitor.ProfileStats {
+	return []monitor.ProfileStats{{Profile: monitor.Profile{Key: "AS14061-NL", Trust: 70}, Current: true, Uptime: 99.5}}
+}
+func (f *fakeProvider) Recheck()                      { f.rechecked = true }
+func (f *fakeProvider) SetBrowserWebRTC(ips []string) { f.webrtc = ips }
 
 func do(h http.Handler, method, path, host, body string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -105,5 +108,19 @@ func TestListenLoopback(t *testing.T) {
 	defer ln.Close()
 	if !strings.HasPrefix(ln.Addr().String(), "127.0.0.1:") {
 		t.Fatalf("must bind loopback only, got %s", ln.Addr())
+	}
+}
+
+func TestProfilesAPI(t *testing.T) {
+	w := do(Handler(&fakeProvider{}), "GET", "/api/profiles?days=7", "127.0.0.1:8737", "")
+	if w.Code != 200 {
+		t.Fatalf("code %d", w.Code)
+	}
+	var ps []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &ps); err != nil || len(ps) != 1 {
+		t.Fatalf("bad profiles json: %s (%v)", w.Body, err)
+	}
+	if ps[0]["key"] != "AS14061-NL" || ps[0]["current"] != true || ps[0]["trust"] != float64(70) {
+		t.Fatalf("unexpected profile: %v", ps[0])
 	}
 }

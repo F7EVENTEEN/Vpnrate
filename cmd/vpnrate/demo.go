@@ -13,11 +13,11 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/ipinfo"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/monitor"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/netif"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/store"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/web"
+	"github.com/F7EVENTEEN/Vpnrate/internal/ipinfo"
+	"github.com/F7EVENTEEN/Vpnrate/internal/monitor"
+	"github.com/F7EVENTEEN/Vpnrate/internal/netif"
+	"github.com/F7EVENTEEN/Vpnrate/internal/store"
+	"github.com/F7EVENTEEN/Vpnrate/internal/web"
 )
 
 // Demo mode serves the dashboard with made-up data (documentation IP ranges,
@@ -121,11 +121,27 @@ func seedDemoHistory(st *store.Store, now time.Time) {
 		return false
 	}
 
+	const nl, de, home = "AS64500-NL", "AS64501-DE", "AS64496-RU"
+	profileAt := func(t time.Time) string {
+		if t.Before(vpnDown) {
+			return de
+		}
+		return nl
+	}
+
+	// Half an hour without VPN three days ago, to show the "direct" row.
+	for t := end.Add(-72 * time.Hour); t.Before(end.Add(-71*time.Hour - 30*time.Minute)); t = t.Add(time.Minute) {
+		st.AppendSample(store.MinuteSample{T: t, Probes: 12, OK: 12, AvgMs: 18 + rand.Float64()*4, P95Ms: 25, Profile: home})
+	}
+
 	for t := begin; t.Before(end); t = t.Add(time.Minute) {
 		hour := float64(t.Hour()) + float64(t.Minute())/60
 		// Evening congestion bump plus noise.
 		base := 32 + 14*math.Max(0, math.Sin((hour-14)/24*2*math.Pi)) + rand.Float64()*6
-		s := store.MinuteSample{T: t, Probes: 12, OK: 12, AvgMs: base, P95Ms: base * 1.6}
+		if t.Before(vpnDown) {
+			base += 25 // the older VPN was slower
+		}
+		s := store.MinuteSample{T: t, Probes: 12, OK: 12, AvgMs: base, P95Ms: base * 1.6, Profile: profileAt(t)}
 		if down(t) {
 			s.OK, s.AvgMs, s.P95Ms = 0, 0, 0
 		}
@@ -140,12 +156,21 @@ func seedDemoHistory(st *store.Store, now time.Time) {
 	}
 	for _, o := range outages {
 		d := time.Duration(o.mins) * time.Minute
-		ev(o.start, store.KindOffline, "connection lost", nil)
+		ev(o.start, store.KindOffline, "connection lost", map[string]any{"profile": profileAt(o.start)})
 		ev(o.start.Add(d), store.KindOnline, fmt.Sprintf("connection restored after %s", d), map[string]any{"duration_s": d.Seconds()})
 	}
-	ev(vpnDown, store.KindVPNDown, "VPN tunnel down: wg-amsterdam", nil)
-	ev(vpnDown.Add(40*time.Second), store.KindVPNUp, "VPN tunnel up: wg-amsterdam", nil)
+	ev(vpnDown, store.KindVPNDown, "VPN down: singbox_tun", map[string]any{"profile": de})
+	ev(vpnDown.Add(40*time.Second), store.KindVPNUp, "VPN up: wg-amsterdam", nil)
 	ev(vpnDown.Add(50*time.Second), store.KindIPChanged, "exit IP changed: 203.0.113.17 → "+demoExit, nil)
 	ev(vpnDown.Add(55*time.Second), store.KindLeak, "DNS leak: DNS resolver 192.0.2.53 (HomeISP, AS64511) is in DE, exit IP is in NL", map[string]any{"type": "DNS"})
 	ev(vpnDown.Add(3*time.Minute), store.KindLeakFixed, "DNS leak resolved", map[string]any{"type": "DNS"})
+
+	st.SaveJSON("profiles.json", map[string]*monitor.Profile{
+		nl: {Key: nl, Label: "ExampleNet Hosting B.V.", Country: "NL", ASN: 64500, Via: "wg-amsterdam",
+			Datacenter: true, Trust: 70, Grade: "good", FirstSeen: vpnDown, LastSeen: now},
+		de: {Key: de, Label: "OtherCloud GmbH", Country: "DE", ASN: 64501, Via: "singbox_tun",
+			Datacenter: true, Trust: 55, Grade: "suspicious", FirstSeen: begin, LastSeen: vpnDown},
+		home: {Key: home, Label: "HomeISP", Country: "RU", ASN: 64496, Via: "direct",
+			Trust: 60, Grade: "suspicious", FirstSeen: end.Add(-72 * time.Hour), LastSeen: end.Add(-71*time.Hour - 30*time.Minute)},
+	})
 }

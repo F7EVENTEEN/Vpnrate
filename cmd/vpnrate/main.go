@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,15 +18,16 @@ import (
 	"time"
 	_ "time/tzdata" // timezone database for the leak check on machines without one
 
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/ipinfo"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/leak"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/monitor"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/netif"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/probe"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/publicip"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/store"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/ui"
-	"github.com/F7EVENTEEN/Vpn_rate_agent/internal/web"
+	"github.com/F7EVENTEEN/Vpnrate/internal/ipinfo"
+	"github.com/F7EVENTEEN/Vpnrate/internal/leak"
+	"github.com/F7EVENTEEN/Vpnrate/internal/monitor"
+	"github.com/F7EVENTEEN/Vpnrate/internal/netif"
+	"github.com/F7EVENTEEN/Vpnrate/internal/probe"
+	"github.com/F7EVENTEEN/Vpnrate/internal/publicip"
+	"github.com/F7EVENTEEN/Vpnrate/internal/store"
+	"github.com/F7EVENTEEN/Vpnrate/internal/sysproxy"
+	"github.com/F7EVENTEEN/Vpnrate/internal/ui"
+	"github.com/F7EVENTEEN/Vpnrate/internal/web"
 )
 
 var version = "dev"
@@ -64,14 +66,14 @@ func main() {
 			log.SetOutput(f)
 		}
 	}
-	url := fmt.Sprintf("http://127.0.0.1:%d/", *port)
+	dashURL := fmt.Sprintf("http://127.0.0.1:%d/", *port)
 
 	ln, err := web.ListenLoopback(*port)
 	if err != nil {
 		// Most likely another instance is already running: just show it.
 		log.Printf("listen: %v", err)
 		if !*headless {
-			ui.OpenURL(url)
+			ui.OpenURL(dashURL)
 		}
 		os.Exit(1)
 	}
@@ -88,11 +90,28 @@ func main() {
 		saveConfig(cfgPath, cfg)
 	}
 
-	ipc := ipinfo.NewClient(filepath.Join(*dataDir, "ipcache.json"))
-	v4, v6 := publicip.New(publicip.V4), publicip.New(publicip.V6)
+	// Proxy-mode VPN clients set the system proxy instead of adding a tunnel
+	// adapter; route our checks the same way so we see the browser's exit.
+	proxyURL := func() *url.URL {
+		if p, ok := sysproxy.Current(); ok {
+			return p.URL()
+		}
+		return nil
+	}
+	ipc := ipinfo.NewClient(filepath.Join(*dataDir, "ipcache.json"), func(*http.Request) (*url.URL, error) { return proxyURL(), nil })
+	v4, v6 := publicip.New(publicip.V4, proxyURL), publicip.New(publicip.V6, proxyURL)
 	mon := monitor.New(monitor.Deps{
 		Probe: func(ctx context.Context) (bool, time.Duration) {
+			if p, ok := sysproxy.Current(); ok {
+				return probeVia(ctx, p)
+			}
 			return probe.Dial(ctx, probe.DefaultTargets, 3*time.Second)
+		},
+		Proxy: func() string {
+			if p, ok := sysproxy.Current(); ok {
+				return p.Addr
+			}
+			return ""
 		},
 		PublicV4:    v4.Get,
 		PublicV6:    v6.Get,
@@ -107,7 +126,7 @@ func main() {
 	srv := &http.Server{Handler: web.Handler(mon), ReadHeaderTimeout: 5 * time.Second}
 	go srv.Serve(ln)
 	go mon.Run(ctx)
-	log.Printf("vpnrate %s: dashboard at %s, data in %s", version, url, *dataDir)
+	log.Printf("vpnrate %s: dashboard at %s, data in %s", version, dashURL, *dataDir)
 
 	if *headless {
 		mon.Subscribe(func(e store.Event) { log.Printf("[%s] %s", e.Kind, e.Message) })
@@ -115,7 +134,7 @@ func main() {
 		signal.Notify(sig, os.Interrupt)
 		<-sig
 	} else {
-		tray := &ui.Tray{Mon: mon, URL: url, Notify: cfg.Notifications}
+		tray := &ui.Tray{Mon: mon, URL: dashURL, Notify: cfg.Notifications}
 		tray.Run()
 		cfg.Notifications = tray.Notify
 		saveConfig(cfgPath, cfg)
@@ -145,4 +164,19 @@ func loadConfig(path string) config {
 func saveConfig(path string, c config) {
 	b, _ := json.MarshalIndent(c, "", "  ")
 	os.WriteFile(path, b, 0o644)
+}
+
+// probeVia measures reachability through the proxy, which is what matters
+// to the user: a dead proxy client means no internet for the browser.
+func probeVia(ctx context.Context, p sysproxy.Proxy) (bool, time.Duration) {
+	for _, t := range probe.DefaultTargets {
+		start := time.Now()
+		c, err := sysproxy.Dial(ctx, p, t, 4*time.Second)
+		if err != nil {
+			continue
+		}
+		c.Close()
+		return true, time.Since(start)
+	}
+	return false, 0
 }

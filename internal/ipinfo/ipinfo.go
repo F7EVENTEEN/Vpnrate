@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -116,9 +117,11 @@ type Client struct {
 	cache map[string]Info
 }
 
-func NewClient(cachePath string) *Client {
+// NewClient builds a cached client; proxy (may be nil) routes lookups the
+// same way the user's browser goes.
+func NewClient(cachePath string, proxy func(*http.Request) (*url.URL, error)) *Client {
 	c := &Client{
-		HTTP:        &http.Client{Timeout: 10 * time.Second},
+		HTTP:        &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: proxy}},
 		IPAPIisURL:  "https://api.ipapi.is/?q=%s",
 		IPAPIcomURL: "http://ip-api.com/json/%s?fields=status,message,country,countryCode,city,timezone,isp,org,as,mobile,proxy,hosting,query",
 		TTL:         24 * time.Hour,

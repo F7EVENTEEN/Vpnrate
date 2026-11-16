@@ -1,0 +1,33 @@
+# Push a tag like v0.2.0 and this builds vpnrate.exe from the tagged source
+# on a clean GitHub machine, then attaches it to a GitHub Release.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+      - name: Build
+        shell: bash
+        run: |
+          go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=${GITHUB_REF_NAME}" -o vpnrate.exe ./cmd/vpnrate
+          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o vpnrate-cli.exe ./cmd/vpnrate
+          sha256sum vpnrate.exe vpnrate-cli.exe > SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            vpnrate.exe
+            vpnrate-cli.exe
+            SHA256SUMS.txt

@@ -9,6 +9,8 @@
 Крошечный фоновый агент: круглосуточно следит за подключением и показывает, насколько оно
 **стабильное** и насколько **чистым** твой выходной IP выглядит для сайтов.
 
+[![CI](https://github.com/F7EVENTEEN/Vpnrate/actions/workflows/ci.yml/badge.svg)](https://github.com/F7EVENTEEN/Vpnrate/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/F7EVENTEEN/Vpnrate?color=22c55e)](https://github.com/F7EVENTEEN/Vpnrate/releases/latest)
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?logo=windows&logoColor=white)
 ![RAM](https://img.shields.io/badge/ОЗУ-~25%20МБ-22c55e)
@@ -43,6 +45,7 @@ VPN Rate живёт в трее и **помнит всё, что происхо�
 | Считает обрывы и падения VPN | ❌ | ✅ |
 | Уведомляет, как только появилась утечка | ❌ | ✅ |
 | История: когда сменился IP и каким он был | ❌ | ✅ |
+| **Сравнивает твои VPN** между собой | ❌ | ✅ |
 | Открытая, объяснимая формула рейтинга | ❌ | ✅ |
 | Данные не покидают компьютер | ❌ | ✅ |
 
@@ -50,6 +53,8 @@ VPN Rate живёт в трее и **помнит всё, что происхо�
 
 - 📶 **Стабильность:** микро-проба TCP каждые 5 секунд, каждый обрыв записывается с длительностью
 - 🔌 **Слежение за VPN-туннелем:** WireGuard, AmneziaWG, OpenVPN, sing-box, Hiddify, Outline, Wintun/TAP и другие
+- ⚖️ **Сравнение VPN:** у каждой сети выхода своя строка с аптаймом, обрывами, задержкой и Trust. Через неделю видно, какой VPN реально лучше
+- 🧦 **Режим прокси:** работает и с v2rayN, Nekoray, Hiddify, Clash без TUN, потому что идёт через системный прокси Windows, как и браузер
 - 🕵️ **Утечки:** DNS, UDP/WebRTC (системно и в браузере), IPv6 мимо туннеля, часовой пояс
 - 🏷️ **Репутация IP:** датацентр, VPN, прокси, Tor, абьюз. Запрос идёт только при смене IP
 - 🧮 **Две открытые оценки,** Trust и Stability, у каждого штрафа указана причина
@@ -74,11 +79,11 @@ VPN Rate живёт в трее и **помнит всё, что происхо�
 
 ## 🚀 Установка
 
-Скачай `vpnrate.exe` из [Releases](https://github.com/F7EVENTEEN/Vpn_rate_agent/releases) и запусти.
+Скачай `vpnrate.exe` из [Releases](https://github.com/F7EVENTEEN/Vpnrate/releases) и запусти.
 Или поставь через Go:
 
 ```
-go install github.com/F7EVENTEEN/Vpn_rate_agent/cmd/vpnrate@latest
+go install github.com/F7EVENTEEN/Vpnrate/cmd/vpnrate@latest
 ```
 
 В трее появится значок, по клику откроется дашборд <http://127.0.0.1:8737>. При первом
@@ -86,6 +91,21 @@ go install github.com/F7EVENTEEN/Vpn_rate_agent/cmd/vpnrate@latest
 меню трея. История хранится в `%APPDATA%\vpnrate\`, 30 дней.
 
 ## ❓ FAQ
+
+<details>
+<summary><b>Как он находит мой VPN? Я ничего не настраивал.</b></summary>
+<br>Двумя способами, раз в 5 секунд. Клиенты в режиме <b>TUN</b> (WireGuard, AmneziaWG, OpenVPN, sing-box…) создают виртуальный сетевой адаптер, и агент узнаёт его по имени, описанию и типу. Клиенты в режиме <b>прокси</b> (v2rayN, Nekoray…) включают системный прокси Windows. Агент читает его и пускает свои проверки через него, поэтому видит тот же выход, что и браузер.
+</details>
+
+<details>
+<summary><b>У меня несколько VPN. Какой он оценивает?</b></summary>
+<br>Тот, через который сейчас реально идёт трафик: одновременно он идёт только по одному маршруту. Каждая сеть выхода (ASN провайдера + страна) автоматически становится <b>профилем</b>, и её минуты, обрывы, падения VPN и Trust записываются отдельно. Переключай VPN как обычно, а таблица «Твои подключения» их сравнит. Работа без VPN попадает в строку «напрямую».
+</details>
+
+<details>
+<summary><b>Режим прокси: почему UDP помечен как утечка?</b></summary>
+<br>Потому что это и есть утечка. Системный HTTP/SOCKS-прокси передаёт только TCP-трафик приложений, которые его поддерживают. UDP, включая WebRTC в браузере, идёт напрямую и может раскрыть твой реальный IP. Решение: переключить клиент в режим TUN или отключить WebRTC в браузере.
+</details>
 
 <details>
 <summary><b>Высокий рейтинг гарантирует, что меня не забанят?</b></summary>
@@ -106,6 +126,8 @@ go install github.com/F7EVENTEEN/Vpn_rate_agent/cmd/vpnrate@latest
 <summary><b>Замедляет ли он интернет?</b></summary>
 <br>Нет. Проба — одно TCP-рукопожатие раз в 5 секунд, несколько байт.
 </details>
+
+Релизы собираются автоматически через [GitHub Actions](.github/workflows/release.yml) из открытого кода, руками ничего не загружается.
 
 Концепция и все решения описаны в [docs/CONCEPT.md](docs/CONCEPT.md).
 
