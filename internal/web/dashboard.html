@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VPN Rate</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #fff; --text: #16181d; --muted: #6b7280; --line: #e5e7eb;
+  --good: #16a34a; --warn: #d97706; --bad: #dc2626; --unk: #9ca3af; --accent: #2563eb;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f1115; --card: #171a21; --text: #e6e8ec; --muted: #8b93a1; --line: #262b35;
+    --good: #22c55e; --warn: #f59e0b; --bad: #ef4444; --unk: #6b7280; --accent: #60a5fa; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 20px 16px 40px; }
+header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+h1 { font-size: 20px; margin: 0; letter-spacing: -.01em; }
+.pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--line); }
+.pill.good { color: var(--good); border-color: currentColor; }
+.pill.bad { color: var(--bad); border-color: currentColor; }
+.pill.unk { color: var(--muted); }
+.spacer { flex: 1; }
+button { font: inherit; padding: 6px 14px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--card); color: var(--text); cursor: pointer; }
+button:hover { border-color: var(--accent); }
+.grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.card h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 12px;
+  text-transform: uppercase; letter-spacing: .04em; }
+.score { display: flex; align-items: center; gap: 16px; }
+.num { font-size: 44px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.grade { font-weight: 600; }
+.sub { color: var(--muted); font-size: 12px; }
+ul.pen { list-style: none; padding: 0; margin: 12px 0 0; }
+ul.pen li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0;
+  border-top: 1px dashed var(--line); font-size: 13px; }
+ul.pen li b { color: var(--bad); font-variant-numeric: tabular-nums; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; font-size: 13px; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; word-break: break-all; }
+.tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.tag { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); }
+.tag.bad { color: var(--bad); border-color: currentColor; }
+.tag.good { color: var(--good); border-color: currentColor; }
+.row { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; border-top: 1px solid var(--line); }
+.row:first-of-type { border-top: 0; }
+.dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; flex: none; background: var(--unk); }
+.dot.ok { background: var(--good); } .dot.leak { background: var(--bad); }
+.row .name { font-weight: 600; min-width: 80px; }
+.row .det { color: var(--muted); font-size: 12px; }
+.wide { grid-column: 1 / -1; }
+.strip { display: flex; gap: 2px; height: 34px; align-items: stretch; }
+.strip i { flex: 1; border-radius: 2px; background: var(--line); }
+.axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: 4px; }
+svg.spark { width: 100%; height: 70px; display: block; margin-top: 12px; }
+.stats { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 12px; }
+.stats div b { display: block; font-size: 18px; font-variant-numeric: tabular-nums; }
+.ev { font-size: 13px; max-height: 320px; overflow: auto; }
+.ev .row { padding: 6px 0; }
+.ev time { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 120px; font-size: 12px; }
+.muted { color: var(--muted); }
+footer { margin-top: 20px; color: var(--muted); font-size: 12px; }
+footer a { color: inherit; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>VPN Rate</h1>
+    <span id="online" class="pill unk">…</span>
+    <span id="vpn" class="pill unk">…</span>
+    <span class="spacer"></span>
+    <span id="updated" class="sub"></span>
+    <button id="recheck" data-t="recheck">Recheck</button>
+  </header>
+
+  <div class="grid">
+    <section class="card">
+      <h2 data-t="trust">Trust score</h2>
+      <div class="score"><div class="num" id="trustNum">–</div>
+        <div><div class="grade" id="trustGrade"></div><div class="sub" data-t="trustSub">how clean your exit looks to websites</div></div></div>
+      <ul class="pen" id="trustPen"></ul>
+    </section>
+    <section class="card">
+      <h2 data-t="stability">Stability (24h)</h2>
+      <div class="score"><div class="num" id="stabNum">–</div>
+        <div><div class="grade" id="stabGrade"></div><div class="sub" data-t="stabSub">drops, downtime, tunnel failures</div></div></div>
+      <ul class="pen" id="stabPen"></ul>
+    </section>
+
+    <section class="card">
+      <h2 data-t="exit">Exit IP</h2>
+      <dl class="kv" id="exit"></dl>
+      <div class="tags" id="tags"></div>
+    </section>
+    <section class="card">
+      <h2 data-t="leaks">Leaks</h2>
+      <div id="leaks"></div>
+    </section>
+    <section class="card">
+      <h2 data-t="events">Events</h2>
+      <div class="ev" id="events"></div>
+    </section>
+
+    <section class="card wide">
+      <h2 data-t="uptime">Connection, last 24 hours</h2>
+      <div class="stats" id="stats"></div>
+      <div class="strip" id="strip"></div>
+      <div class="axis"><span>−24h</span><span>−18h</span><span>−12h</span><span>−6h</span><span data-t="now">now</span></div>
+      <svg class="spark" id="spark" preserveAspectRatio="none"></svg>
+      <div class="sub" data-t="latency">TCP handshake latency, ms (per minute avg)</div>
+    </section>
+  </div>
+  <footer><span data-t="foot">Everything stays on this computer. Ratings are an open heuristic, not a guarantee.</span></footer>
+</div>
+
+<script>
+const RU = (navigator.language || '').toLowerCase().startsWith('ru');
+const T = RU ? {
+  recheck: 'Перепроверить', trust: 'Доверие (Trust)', stability: 'Стабильность (24 ч)',
+  trustSub: 'насколько «чисто» выглядит выход для сайтов', stabSub: 'обрывы, простои, падения туннеля',
+  exit: 'Выходной IP', leaks: 'Утечки', uptime: 'Соединение за 24 часа', now: 'сейчас',
+  latency: 'Задержка TCP-рукопожатия, мс (среднее за минуту)', events: 'События',
+  foot: 'Все данные остаются на этом компьютере. Рейтинг — открытая эвристика, а не гарантия.',
+  online: 'В сети', offline: 'Нет сети', vpnOn: 'VPN активен', vpnOff: 'VPN не найден',
+  excellent: 'Отлично', good: 'Хорошо', suspicious: 'Подозрительно', high_risk: 'Высокий риск',
+  noPen: 'Штрафов нет', ip4: 'IPv4', ip6: 'IPv6', loc: 'Где', asn: 'Сеть', src: 'Источник',
+  dc: 'Датацентр', resid: 'Не датацентр', vpnT: 'VPN', proxy: 'Прокси', tor: 'Tor', abuser: 'Абьюз', mobile: 'Мобильный',
+  ok: 'ок', leak: 'утечка', unknown: 'неизвестно', uptimeL: 'Аптайм', outages: 'Обрывы', drops: 'Падения VPN', p95: 'p95 задержка',
+  noEvents: 'Пока событий нет', checking: 'Проверяем…', updated: 'обновлено', down: 'нет сети с',
+  DNS: 'DNS', UDP: 'UDP', WebRTC: 'WebRTC (браузер)', IPv6: 'IPv6', Timezone: 'Часовой пояс',
+  pen: {
+    tor: 'IP — выходной узел Tor', unsupported_country: 'Страна выхода не поддерживается AI-сервисами',
+    abuser: 'IP в чёрных списках / замечен в абьюзе', datacenter: 'IP принадлежит датацентру или хостингу',
+    vpn: 'IP известен как VPN', proxy: 'IP известен как прокси',
+    dns_leak: 'DNS-резолвер в другой стране, чем выходной IP', webrtc_leak: 'UDP/WebRTC раскрывает другой IP',
+    ipv6_leak: 'IPv6-трафик идёт мимо туннеля', timezone: 'Часовой пояс системы не совпадает с IP',
+    downtime: 'Время без интернета', outages: 'Обрывы соединения', tunnel_drops: 'Падения VPN-туннеля',
+    latency: 'Высокая p95-задержка',
+  },
+} : {
+  online: 'Online', offline: 'Offline', vpnOn: 'VPN active', vpnOff: 'No VPN tunnel',
+  excellent: 'Excellent', good: 'Good', suspicious: 'Suspicious', high_risk: 'High risk',
+  noPen: 'No penalties', ip4: 'IPv4', ip6: 'IPv6', loc: 'Location', asn: 'Network', src: 'Source',
+  dc: 'Datacenter', resid: 'Not datacenter', vpnT: 'VPN', proxy: 'Proxy', tor: 'Tor', abuser: 'Abuser', mobile: 'Mobile',
+  ok: 'ok', leak: 'leak', unknown: 'unknown', uptimeL: 'Uptime', outages: 'Drops', drops: 'VPN drops', p95: 'p95 latency',
+  noEvents: 'No events yet', checking: 'Checking…', updated: 'updated', down: 'offline since',
+  DNS: 'DNS', UDP: 'UDP', WebRTC: 'WebRTC (browser)', IPv6: 'IPv6', Timezone: 'Timezone',
+};
+const t = k => T[k] || k;
+if (RU) { document.documentElement.lang = 'ru';
+  document.querySelectorAll('[data-t]').forEach(e => { if (T[e.dataset.t]) e.textContent = T[e.dataset.t]; }); }
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const color = s => s >= 85 ? 'var(--good)' : s >= 70 ? 'var(--good)' : s >= 50 ? 'var(--warn)' : 'var(--bad)';
+const fmtTime = s => new Date(s).toLocaleString(RU ? 'ru-RU' : undefined, {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'});
+const api = (p, o) => fetch(p, o).then(r => r.ok && r.status !== 204 ? r.json() : null);
+const post = (p, body) => api(p, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+
+function penalties(el, list) {
+  el.innerHTML = (list && list.length) ? list.map(p => `<li><span>${esc((T.pen && T.pen[p.code]) || p.reason)}</span><b>−${p.points}</b></li>`).join('')
+    : `<li class="muted"><span>${t('noPen')}</span></li>`;
+}
+
+function renderStatus(s) {
+  $('online').className = 'pill ' + (s.online ? 'good' : 'bad');
+  $('online').textContent = s.online ? `${t('online')} · ${Math.round(s.latency_ms)} ms` : `${t('offline')}`;
+  $('vpn').className = 'pill ' + (s.vpn_active ? 'good' : 'unk');
+  $('vpn').textContent = s.vpn_active ? `${t('vpnOn')}: ${(s.tunnels || []).map(x => x.name).join(', ')}` : t('vpnOff');
+  $('updated').textContent = `${t('updated')} ${new Date().toLocaleTimeString()}`;
+
+  const tr = s.trust, st = s.stability;
+  $('trustNum').textContent = s.checked ? tr.score : '…';
+  $('trustNum').style.color = s.checked ? color(tr.score) : '';
+  $('trustGrade').textContent = s.checked ? t(tr.grade) : t('checking');
+  penalties($('trustPen'), s.checked ? tr.penalties : []);
+  $('stabNum').textContent = st.score; $('stabNum').style.color = color(st.score);
+  $('stabGrade').textContent = t(st.score >= 85 ? 'excellent' : st.score >= 70 ? 'good' : st.score >= 50 ? 'suspicious' : 'high_risk');
+  penalties($('stabPen'), st.penalties);
+
+  const e = s.exit;
+  $('exit').innerHTML = [
+    [t('ip4'), s.public_v4 || '—'],
+    [t('ip6'), s.public_v6 || '—'],
+    [t('loc'), e ? `${esc(e.country_name || e.country)}${e.city ? ', ' + esc(e.city) : ''} <span class="muted">${esc(e.country)}</span>` : '—'],
+    [t('asn'), e && e.asn ? `AS${e.asn} · ${esc(e.org)}` : '—'],
+    [t('src'), e ? esc(e.source) : '—'],
+  ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+  const tags = [];
+  if (e) {
+    tags.push(e.datacenter ? `<span class="tag bad">${t('dc')}</span>` : `<span class="tag good">${t('resid')}</span>`);
+    if (e.vpn) tags.push(`<span class="tag bad">${t('vpnT')}</span>`);
+    if (e.proxy) tags.push(`<span class="tag bad">${t('proxy')}</span>`);
+    if (e.tor) tags.push(`<span class="tag bad">${t('tor')}</span>`);
+    if (e.abuser) tags.push(`<span class="tag bad">${t('abuser')}</span>`);
+    if (e.mobile) tags.push(`<span class="tag">${t('mobile')}</span>`);
+  }
+  $('tags').innerHTML = tags.join('');
+
+  const L = s.leaks;
+  $('leaks').innerHTML = [['DNS', L.dns], ['UDP', L.udp], ['WebRTC', L.webrtc], ['IPv6', L.ipv6], ['Timezone', L.timezone]]
+    .map(([n, v]) => { v = v || {status: 'unknown'}; const st = v.status || 'unknown';
+      return `<div class="row"><span class="dot ${st}"></span><div><span class="name">${t(n)}</span> <span class="muted">${t(st)}</span>
+        <div class="det">${esc(v.detail || v.ip || '')}</div></div></div>`; }).join('');
+
+  $('stats').innerHTML = [
+    [t('uptimeL'), s.uptime_24h.toFixed(2) + '%'], [t('outages'), s.outages_24h],
+    [t('drops'), s.tunnel_drops_24h], [t('p95'), Math.round(s.p95_ms) + ' ms'],
+  ].map(([k, v]) => `<div><span class="sub">${k}</span><b>${v}</b></div>`).join('')
+    + (s.down_since ? `<div><span class="sub">${t('down')}</span><b>${fmtTime(s.down_since)}</b></div>` : '');
+
+}
+
+function renderSamples(samples) {
+  const now = Date.now(), slots = 96, slotMs = 15 * 60e3;
+  const agg = Array.from({length: slots}, () => ({p: 0, ok: 0}));
+  for (const m of samples) {
+    const i = slots - 1 - Math.floor((now - new Date(m.t)) / slotMs);
+    if (i >= 0 && i < slots) { agg[i].p += m.probes; agg[i].ok += m.ok; }
+  }
+  $('strip').innerHTML = agg.map(a => {
+    if (!a.p) return '<i title="no data"></i>';
+    const u = a.ok / a.p, c = u >= 0.999 ? 'var(--good)' : u >= 0.95 ? 'var(--warn)' : 'var(--bad)';
+    return `<i style="background:${c}" title="${(u * 100).toFixed(1)}%"></i>`;
+  }).join('');
+
+  const pts = samples.filter(m => m.ok > 0).map(m => [new Date(m.t).getTime(), m.avg_ms]);
+  const svg = $('spark');
+  if (pts.length < 2) { svg.innerHTML = ''; return; }
+  const W = 1000, H = 70, x0 = now - 24 * 3600e3;
+  const sorted = pts.map(p => p[1]).sort((a, b) => a - b);
+  const ymax = Math.max(sorted[Math.floor(sorted.length * 0.98)] || 1, 10);
+  const d = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${((x - x0) / (now - x0) * W).toFixed(1)},${(H - Math.min(y, ymax) / ymax * (H - 4)).toFixed(1)}`).join('');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.innerHTML = `<path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+    <text x="4" y="12" font-size="11" fill="var(--muted)">${Math.round(ymax)} ms</text>`;
+}
+
+function renderEvents(ev) {
+  ev = (ev || []).slice(-200).reverse();
+  $('events').innerHTML = ev.length ? ev.map(e => {
+    const bad = ['offline', 'vpn_down', 'leak'].includes(e.kind), good = ['online', 'vpn_up', 'leak_fixed'].includes(e.kind);
+    return `<div class="row"><span class="dot ${bad ? 'leak' : good ? 'ok' : ''}"></span><time>${fmtTime(e.time)}</time><span>${esc(e.message)}</span></div>`;
+  }).join('') : `<div class="muted">${t('noEvents')}</div>`;
+}
+
+// Browser-side WebRTC test: gather ICE candidates and hand their IPs to the agent.
+async function webrtcTest() {
+  if (!window.RTCPeerConnection) return post('/api/webrtc', {ips: []});
+  const ips = new Set();
+  const pc = new RTCPeerConnection({iceServers: [{urls: 'stun:stun.l.google.com:19302'}, {urls: 'stun:stun.cloudflare.com:3478'}]});
+  pc.createDataChannel('x');
+  pc.onicecandidate = e => {
+    if (!e.candidate || !e.candidate.candidate) return;
+    const parts = e.candidate.candidate.split(' ');
+    const ip = parts[4];
+    if (ip && !ip.endsWith('.local')) ips.add(ip);
+  };
+  await pc.setLocalDescription(await pc.createOffer());
+  await new Promise(r => { pc.onicegatheringstatechange = () => pc.iceGatheringState === 'complete' && r(); setTimeout(r, 4000); });
+  pc.close();
+  await post('/api/webrtc', {ips: [...ips]});
+}
+
+async function refresh() {
+  try { renderStatus(await api('/api/status')); } catch (e) { $('online').className = 'pill bad'; $('online').textContent = 'agent not running'; }
+}
+async function refreshSlow() {
+  try {
+    const since = new Date(Date.now() - 7 * 864e5).toISOString();
+    const [s, ev] = await Promise.all([api('/api/samples?hours=24'), api('/api/events?since=' + encodeURIComponent(since))]);
+    renderSamples(s || []); renderEvents(ev);
+  } catch (e) {}
+}
+$('recheck').onclick = async () => { await post('/api/recheck'); webrtcTest().then(refresh); setTimeout(refresh, 4000); setTimeout(refreshSlow, 6000); };
+
+refresh(); refreshSlow(); webrtcTest().then(refresh);
+setInterval(refresh, 5000); setInterval(refreshSlow, 30000);
+</script>
+</body>
+</html>
