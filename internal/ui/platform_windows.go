@@ -1,11 +1,16 @@
 package ui
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
+	"os/user"
 	"strings"
 	"syscall"
+	"unicode/utf16"
 
 	"golang.org/x/sys/windows/registry"
 )
@@ -18,7 +23,59 @@ const (
 	createNoWindow = 0x08000000
 )
 
-func AutostartEnabled() bool {
+const taskName = "VPN Rate"
+
+// AutostartRegistered reports whether a scheduled task or Run entry exists.
+func AutostartRegistered() bool {
+	if hidden("schtasks.exe", "/Query", "/TN", taskName).Run() == nil {
+		return true
+	}
+	return runValueExists()
+}
+
+// EnableAutostart registers a logon task for exe; if Task Scheduler refuses,
+// it falls back to the Run key. Only one mechanism is kept, so the agent
+// is never launched twice. It returns which one was used.
+func EnableAutostart(exe string) (string, error) {
+	u, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp("", "vpnrate-task-*.xml")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(f.Name())
+	// schtasks wants UTF-16 for non-ASCII user names and paths.
+	u16 := utf16.Encode([]rune(TaskXML(u.Username, exe)))
+	b := make([]byte, 2+2*len(u16))
+	b[0], b[1] = 0xFF, 0xFE
+	for i, c := range u16 {
+		binary.LittleEndian.PutUint16(b[2+2*i:], c)
+	}
+	f.Write(b)
+	f.Close()
+	if out, err := hidden("schtasks.exe", "/Create", "/TN", taskName, "/XML", f.Name(), "/F").CombinedOutput(); err == nil {
+		setRunValue("")
+		return "task", nil
+	} else {
+		log.Printf("autostart: scheduled task failed (%v: %s), using Run key", err, bytes.TrimSpace(out))
+	}
+	return "run", setRunValue(`"` + exe + `" -autostart`)
+}
+
+func DisableAutostart() error {
+	hidden("schtasks.exe", "/Delete", "/TN", taskName, "/F").Run()
+	return setRunValue("")
+}
+
+func hidden(name string, args ...string) *exec.Cmd {
+	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	return cmd
+}
+
+func runValueExists() bool {
 	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE)
 	if err != nil {
 		return false
@@ -28,25 +85,20 @@ func AutostartEnabled() bool {
 	return err == nil
 }
 
-// SetAutostart adds or removes the per-user Run entry (no admin rights needed).
-func SetAutostart(on bool) error {
+// setRunValue writes the Run entry, or deletes it when v is empty.
+func setRunValue(v string) error {
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, runKey, registry.SET_VALUE)
 	if err != nil {
 		return err
 	}
 	defer k.Close()
-	if !on {
-		err := k.DeleteValue(valueName)
-		if err == registry.ErrNotExist {
-			return nil
+	if v == "" {
+		if err := k.DeleteValue(valueName); err != nil && err != registry.ErrNotExist {
+			return err
 		}
-		return err
+		return nil
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	return k.SetStringValue(valueName, `"`+exe+`"`)
+	return k.SetStringValue(valueName, v)
 }
 
 // Notify shows a Windows toast via a hidden PowerShell process.

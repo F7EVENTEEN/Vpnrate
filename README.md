@@ -154,8 +154,10 @@ go install github.com/F7EVENTEEN/Vpnrate/cmd/vpnrate@latest
 ```
 
 A green dot appears in the tray, and clicking it opens the dashboard at <http://127.0.0.1:8737>.
-On first launch VPN Rate adds itself to autostart (per user, no admin rights). You can turn
-that off from the tray menu at any time.
+VPN Rate starts **the moment you log in**: it registers a per-user Task Scheduler logon task (no admin
+rights, no startup delay, restarted if it fails) and falls back to the `Run` key if that's not possible.
+Every launch checks the entry and repairs it, even if you move the exe. If it starts before Wi-Fi or
+the VPN is up, it waits instead of logging a fake outage. Untick *Start with Windows* in the tray to turn it off.
 
 ```
 vpnrate.exe [flags]
@@ -164,7 +166,7 @@ vpnrate.exe [flags]
   -headless       run without the tray, log events to stdout
   -port 8737      dashboard port (always bound to 127.0.0.1)
   -data DIR       where history is kept (default %APPDATA%\vpnrate)
-  -no-autostart   don't register autostart on first run
+  -no-autostart   don't touch the autostart entry during this run
   -version        print version
 ```
 

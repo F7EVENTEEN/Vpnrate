@@ -13,14 +13,15 @@ import (
 )
 
 const (
-	KindOffline   = "offline"
-	KindOnline    = "online"
-	KindIPChanged = "ip_changed"
-	KindVPNDown   = "vpn_down"
-	KindVPNUp     = "vpn_up"
-	KindLeak      = "leak"
-	KindLeakFixed = "leak_fixed"
-	KindStarted   = "started"
+	KindOffline      = "offline"
+	KindOnline       = "online"
+	KindIPChanged    = "ip_changed"
+	KindVPNDown      = "vpn_down"
+	KindVPNUp        = "vpn_up"
+	KindLeak         = "leak"
+	KindLeakFixed    = "leak_fixed"
+	KindStarted      = "started"
+	KindNetworkReady = "network_ready"
 )
 
 type Event struct {

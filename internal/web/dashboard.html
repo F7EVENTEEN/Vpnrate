@@ -146,7 +146,7 @@ const T = RU ? {
   now2: 'сейчас', direct: 'напрямую', proxyMode: 'Прокси',
   profHint: 'Переключи VPN или сервер — каждая сеть выхода получит свою строку, и их можно будет сравнить.',
   foot: 'Все данные остаются на этом компьютере. Рейтинг — открытая эвристика, а не гарантия.',
-  online: 'В сети', offline: 'Нет сети', vpnOn: 'VPN активен', vpnOff: 'VPN не найден',
+  online: 'В сети', offline: 'Нет сети', waitNet: 'Ждём сеть…', vpnOn: 'VPN активен', vpnOff: 'VPN не найден',
   excellent: 'Отлично', good: 'Хорошо', suspicious: 'Подозрительно', high_risk: 'Высокий риск',
   noPen: 'Штрафов нет', ip4: 'IPv4', ip6: 'IPv6', loc: 'Где', asn: 'Сеть', src: 'Источник',
   dc: 'Датацентр', resid: 'Не датацентр', vpnT: 'VPN', proxy: 'Прокси', tor: 'Tor', abuser: 'Абьюз', mobile: 'Мобильный',
@@ -166,7 +166,7 @@ const T = RU ? {
   profiles: 'Your connections, last 7 days', pNet: 'Exit network', pVia: 'Via', pTime: 'Time', pLat: 'Avg latency',
   now2: 'now', direct: 'direct', proxyMode: 'Proxy',
   profHint: 'Switch VPNs or servers: each exit network gets its own row so you can compare them.',
-  online: 'Online', offline: 'Offline', vpnOn: 'VPN active', vpnOff: 'No VPN tunnel',
+  online: 'Online', offline: 'Offline', waitNet: 'Waiting for network…', vpnOn: 'VPN active', vpnOff: 'No VPN tunnel',
   excellent: 'Excellent', good: 'Good', suspicious: 'Suspicious', high_risk: 'High risk',
   noPen: 'No penalties', ip4: 'IPv4', ip6: 'IPv6', loc: 'Location', asn: 'Network', src: 'Source',
   dc: 'Datacenter', resid: 'Not datacenter', vpnT: 'VPN', proxy: 'Proxy', tor: 'Tor', abuser: 'Abuser', mobile: 'Mobile',
@@ -191,8 +191,8 @@ function penalties(el, list) {
 }
 
 function renderStatus(s) {
-  $('online').className = 'pill ' + (s.online ? 'good' : 'bad');
-  $('online').textContent = s.online ? `${t('online')} · ${Math.round(s.latency_ms)} ms` : `${t('offline')}`;
+  $('online').className = 'pill ' + (s.starting ? 'unk' : s.online ? 'good' : 'bad');
+  $('online').textContent = s.starting ? t('waitNet') : s.online ? `${t('online')} · ${Math.round(s.latency_ms)} ms` : `${t('offline')}`;
   $('vpn').className = 'pill ' + (s.vpn_active ? 'good' : 'unk');
   const via = [...(s.tunnels || []).map(x => x.name), ...(s.proxy ? [`${t('proxyMode')} ${s.proxy}`] : [])].join(', ');
   $('vpn').textContent = s.vpn_active ? `${t('vpnOn')}: ${via}` : t('vpnOff');

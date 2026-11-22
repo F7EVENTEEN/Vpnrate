@@ -10,9 +10,10 @@ import (
 
 var errUnsupported = errors.New("not supported on this platform yet")
 
-func AutostartEnabled() bool         { return false }
-func SetAutostart(on bool) error     { return errUnsupported }
-func Notify(title, msg string) error { return errUnsupported }
+func AutostartRegistered() bool                  { return false }
+func EnableAutostart(exe string) (string, error) { return "", errUnsupported }
+func DisableAutostart() error                    { return errUnsupported }
+func Notify(title, msg string) error             { return errUnsupported }
 
 func OpenURL(u string) error {
 	if runtime.GOOS == "darwin" {

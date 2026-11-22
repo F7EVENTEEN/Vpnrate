@@ -14,12 +14,15 @@ import (
 )
 
 type Tray struct {
-	Mon       *monitor.Monitor
-	URL       string
-	Notify    bool
-	OnQuit    func()
-	notifyMu  sync.Mutex
-	lastToast map[string]time.Time
+	Mon    *monitor.Monitor
+	URL    string
+	Notify bool
+	OnQuit func()
+	// Autostart is the current preference; SetAutostart applies and saves it.
+	Autostart    bool
+	SetAutostart func(on bool) error
+	notifyMu     sync.Mutex
+	lastToast    map[string]time.Time
 }
 
 // Run blocks until the user picks Quit.
@@ -51,7 +54,7 @@ func (t *Tray) ready() {
 	mOpen := systray.AddMenuItem("Open dashboard", "")
 	mRecheck := systray.AddMenuItem("Recheck now", "")
 	systray.AddSeparator()
-	mAuto := systray.AddMenuItemCheckbox("Start with Windows", "", AutostartEnabled())
+	mAuto := systray.AddMenuItemCheckbox("Start with Windows", "", t.Autostart)
 	mNotify := systray.AddMenuItemCheckbox("Notifications", "", t.Notify)
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "")
@@ -63,6 +66,8 @@ func (t *Tray) ready() {
 		s := t.Mon.Status()
 		c := Green
 		switch {
+		case s.Starting:
+			c = Gray
 		case !s.Online:
 			c = Red
 		case !s.Checked:
@@ -107,7 +112,7 @@ func (t *Tray) ready() {
 				t.Mon.Recheck()
 			case <-mAuto.ClickedCh:
 				on := !mAuto.Checked()
-				if err := SetAutostart(on); err != nil {
+				if err := t.SetAutostart(on); err != nil {
 					log.Printf("autostart: %v", err)
 					continue
 				}

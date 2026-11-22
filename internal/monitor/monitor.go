@@ -50,6 +50,7 @@ type Leaks struct {
 
 type Status struct {
 	Online         bool            `json:"online"`
+	Starting       bool            `json:"starting"` // waiting for the network after launch
 	DownSince      *time.Time      `json:"down_since,omitempty"`
 	LatencyMs      float64         `json:"latency_ms"`
 	PublicV4       string          `json:"public_v4"`
@@ -85,6 +86,7 @@ type Monitor struct {
 	recent    []store.Event // last 24h, for counters
 	st        Status
 	tunnelsOK bool // tunnels observed at least once
+	warm      bool // network seen at least once since launch
 	lastFull  time.Time
 	leaking   map[string]bool
 	webrtcIPs []netip.Addr
@@ -105,7 +107,7 @@ func New(d Deps, st *store.Store) *Monitor {
 		leaking: map[string]bool{}, recheck: make(chan struct{}, 1),
 		profiles: map[string]*Profile{},
 	}
-	m.st.Online = true
+	m.st.Starting = true
 	m.st.Started = d.Now()
 	m.st.Trust = score.ComputeTrust(score.TrustInput{})
 	m.loadHistory()
@@ -206,33 +208,20 @@ func (m *Monitor) Tick(ctx context.Context) {
 
 	var evs []store.Event
 	m.mu.Lock()
-	if tr := m.det.Observe(now, ok); tr != nil {
-		if tr.Online {
-			d := tr.Outage.Duration().Round(time.Second)
-			evs = append(evs, store.Event{Time: now, Kind: store.KindOnline,
-				Message: fmt.Sprintf("connection restored after %s", d),
-				Data:    map[string]any{"duration_s": d.Seconds(), "start": tr.Outage.Start}})
-		} else {
-			evs = append(evs, store.Event{Time: tr.At, Kind: store.KindOffline, Message: "connection lost",
-				Data: map[string]any{"profile": m.st.Profile}})
-		}
-	}
-	m.st.Online = m.det.Online()
-	if ds := m.det.DownSince(); !ds.IsZero() {
-		m.st.DownSince = &ds
+	if !m.warm && !ok {
+		// Launched at logon before Wi-Fi or the VPN came up: waiting for the
+		// network is not an outage, so nothing is recorded yet.
+		m.st.Online, m.st.Starting = false, true
 	} else {
-		m.st.DownSince = nil
+		if !m.warm {
+			m.warm, m.st.Starting = true, false
+			if wait := now.Sub(m.st.Started); wait >= 10*time.Second {
+				evs = append(evs, store.Event{Time: now, Kind: store.KindNetworkReady,
+					Message: fmt.Sprintf("network available %s after start", wait.Round(time.Second))})
+			}
+		}
+		evs = append(evs, m.observeLocked(now, ok, lat)...)
 	}
-	if ok {
-		m.st.LatencyMs = ms(lat)
-	}
-
-	minute := now.Truncate(time.Minute)
-	if !m.minute.IsZero() && !minute.Equal(m.minute) {
-		m.flushLocked()
-	}
-	m.minute = minute
-	m.bucket = append(m.bucket, probe.Sample{T: now, OK: ok, Latency: lat})
 
 	if terr == nil {
 		// A route is either a tunnel adapter or a system proxy (proxy-mode clients).
@@ -265,6 +254,40 @@ func (m *Monitor) Tick(ctx context.Context) {
 			break
 		}
 	}
+}
+
+// observeLocked feeds one probe result to the outage detector and the
+// per-minute aggregate.
+func (m *Monitor) observeLocked(now time.Time, ok bool, lat time.Duration) []store.Event {
+	var evs []store.Event
+	if tr := m.det.Observe(now, ok); tr != nil {
+		if tr.Online {
+			d := tr.Outage.Duration().Round(time.Second)
+			evs = append(evs, store.Event{Time: now, Kind: store.KindOnline,
+				Message: fmt.Sprintf("connection restored after %s", d),
+				Data:    map[string]any{"duration_s": d.Seconds(), "start": tr.Outage.Start}})
+		} else {
+			evs = append(evs, store.Event{Time: tr.At, Kind: store.KindOffline, Message: "connection lost",
+				Data: map[string]any{"profile": m.st.Profile}})
+		}
+	}
+	m.st.Online = m.det.Online()
+	if ds := m.det.DownSince(); !ds.IsZero() {
+		m.st.DownSince = &ds
+	} else {
+		m.st.DownSince = nil
+	}
+	if ok {
+		m.st.LatencyMs = ms(lat)
+	}
+
+	minute := now.Truncate(time.Minute)
+	if !m.minute.IsZero() && !minute.Equal(m.minute) {
+		m.flushLocked()
+	}
+	m.minute = minute
+	m.bucket = append(m.bucket, probe.Sample{T: now, OK: ok, Latency: lat})
+	return evs
 }
 
 func route(ifs []netif.Iface, proxy string) string {

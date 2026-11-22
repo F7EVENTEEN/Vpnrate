@@ -351,3 +351,35 @@ func TestTunnelPlusProxyKeepsDNSCheck(t *testing.T) {
 		t.Fatalf("with a tunnel up, a foreign ISP resolver is a real leak: %+v", st.Leaks.DNS)
 	}
 }
+
+// At logon the agent may start before Wi-Fi or the VPN is up. That wait is
+// not an outage: counting starts with the first successful probe.
+func TestBootGrace(t *testing.T) {
+	f := newFake()
+	f.probeOK = false
+	m, evs := newMonitor(t, f)
+	for i := 0; i < 6; i++ {
+		m.Tick(context.Background())
+		f.now = f.now.Add(5 * time.Second)
+	}
+	st := m.Status()
+	if st.Online || !st.Starting {
+		t.Fatalf("before the network is up the agent is starting, not online: %+v", st)
+	}
+	if has(*evs, store.KindOffline) || st.Uptime24h != 100 || st.Outages24h != 0 {
+		t.Fatalf("boot wait must not count as an outage: %v uptime=%v", kinds(*evs), st.Uptime24h)
+	}
+	f.probeOK = true
+	m.Tick(context.Background())
+	if !has(*evs, store.KindNetworkReady) || m.Status().Starting || !m.Status().Online {
+		t.Fatalf("want network_ready and online, got %v %+v", kinds(*evs), m.Status())
+	}
+	f.probeOK = false
+	for i := 0; i < 3; i++ {
+		f.now = f.now.Add(5 * time.Second)
+		m.Tick(context.Background())
+	}
+	if !has(*evs, store.KindOffline) {
+		t.Fatalf("after the network was up, drops count again: %v", kinds(*evs))
+	}
+}

@@ -33,15 +33,19 @@ import (
 var version = "dev"
 
 type config struct {
-	Notifications bool `json:"notifications"`
-	AutostartSet  bool `json:"autostart_set"` // first-run autostart decision was made
+	Notifications bool   `json:"notifications"`
+	Autostart     *bool  `json:"autostart,omitempty"`      // nil means on (the default)
+	AutostartPath string `json:"autostart_path,omitempty"` // exe we registered
 }
+
+func (c config) wantAutostart() bool { return c.Autostart == nil || *c.Autostart }
 
 func main() {
 	headless := flag.Bool("headless", false, "run without tray icon (logs to stdout)")
 	port := flag.Int("port", 8737, "dashboard port on 127.0.0.1")
 	dataDir := flag.String("data", defaultDataDir(), "where history is stored")
-	noAutostart := flag.Bool("no-autostart", false, "do not register autostart on first run")
+	noAutostart := flag.Bool("no-autostart", false, "don't touch autostart during this run")
+	autostarted := flag.Bool("autostart", false, "set by the autostart entry; exit quietly if already running")
 	showVersion := flag.Bool("version", false, "print version")
 	demo := flag.Bool("demo", false, "serve the dashboard with fake data (no network access)")
 	flag.Parse()
@@ -71,8 +75,10 @@ func main() {
 	ln, err := web.ListenLoopback(*port)
 	if err != nil {
 		// Most likely another instance is already running: just show it.
+		// When the user double-clicks the exe, show the running instance;
+		// a duplicate launched at logon just leaves.
 		log.Printf("listen: %v", err)
-		if !*headless {
+		if !*headless && !*autostarted {
 			ui.OpenURL(dashURL)
 		}
 		os.Exit(1)
@@ -80,13 +86,8 @@ func main() {
 
 	cfgPath := filepath.Join(*dataDir, "config.json")
 	cfg := loadConfig(cfgPath)
-	if !cfg.AutostartSet && !*headless {
-		if !*noAutostart {
-			if err := ui.SetAutostart(true); err != nil {
-				log.Printf("autostart: %v", err)
-			}
-		}
-		cfg.AutostartSet = true
+	if !*headless && !*noAutostart {
+		syncAutostart(&cfg)
 		saveConfig(cfgPath, cfg)
 	}
 
@@ -134,7 +135,13 @@ func main() {
 		signal.Notify(sig, os.Interrupt)
 		<-sig
 	} else {
-		tray := &ui.Tray{Mon: mon, URL: dashURL, Notify: cfg.Notifications}
+		tray := &ui.Tray{Mon: mon, URL: dashURL, Notify: cfg.Notifications, Autostart: cfg.wantAutostart(),
+			SetAutostart: func(on bool) error {
+				cfg.Autostart = &on
+				syncAutostart(&cfg)
+				saveConfig(cfgPath, cfg)
+				return nil
+			}}
 		tray.Run()
 		cfg.Notifications = tray.Notify
 		saveConfig(cfgPath, cfg)
@@ -144,6 +151,34 @@ func main() {
 	defer scancel()
 	srv.Shutdown(sctx)
 	time.Sleep(100 * time.Millisecond) // let the monitor flush the current minute
+}
+
+// syncAutostart makes the autostart entry match the preference and point at
+// this exe. Running it on every launch repairs a deleted entry or a moved exe.
+func syncAutostart(cfg *config) {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	register, unregister := ui.PlanAutostart(ui.AutostartState{
+		Want: cfg.wantAutostart(), Registered: ui.AutostartRegistered(),
+		RegisteredPath: cfg.AutostartPath, Exe: exe,
+	})
+	switch {
+	case register:
+		how, err := ui.EnableAutostart(exe)
+		if err != nil {
+			log.Printf("autostart: %v", err)
+			return
+		}
+		cfg.AutostartPath = exe
+		log.Printf("autostart registered (%s): %s", how, exe)
+	case unregister:
+		if err := ui.DisableAutostart(); err != nil {
+			log.Printf("autostart: %v", err)
+		}
+		cfg.AutostartPath = ""
+	}
 }
 
 func defaultDataDir() string {
