@@ -12,9 +12,12 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
+	"sync"
 	"time"
 	_ "time/tzdata" // timezone database for the leak check on machines without one
 
@@ -46,6 +49,7 @@ func main() {
 	dataDir := flag.String("data", defaultDataDir(), "where history is stored")
 	noAutostart := flag.Bool("no-autostart", false, "don't touch autostart during this run")
 	autostarted := flag.Bool("autostart", false, "set by the autostart entry; exit quietly if already running")
+	restarted := flag.Bool("restarted", false, "set by the watchdog when it restarts the agent")
 	showVersion := flag.Bool("version", false, "print version")
 	demo := flag.Bool("demo", false, "serve the dashboard with fake data (no network access)")
 	flag.Parse()
@@ -68,11 +72,18 @@ func main() {
 	if !*headless {
 		if f, err := os.OpenFile(filepath.Join(*dataDir, "vpnrate.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
 			log.SetOutput(f)
+			// The tray build has no console: send panics and fatal errors
+			// to the log instead of losing them.
+			debug.SetCrashOutput(f, debug.CrashOptions{})
 		}
 	}
 	dashURL := fmt.Sprintf("http://127.0.0.1:%d/", *port)
 
 	ln, err := web.ListenLoopback(*port)
+	for i := 0; err != nil && *restarted && i < 30; i++ {
+		time.Sleep(500 * time.Millisecond) // the old instance is still exiting
+		ln, err = web.ListenLoopback(*port)
+	}
 	if err != nil {
 		// Most likely another instance is already running: just show it.
 		// When the user double-clicks the exe, show the running instance;
@@ -86,9 +97,20 @@ func main() {
 
 	cfgPath := filepath.Join(*dataDir, "config.json")
 	cfg := loadConfig(cfgPath)
+	var cfgMu sync.Mutex
 	if !*headless && !*noAutostart {
 		syncAutostart(&cfg)
 		saveConfig(cfgPath, cfg)
+		// Re-check periodically: an entry removed while we run is repaired
+		// long before the next reboot, and the log shows when it vanished.
+		go func() {
+			for range time.Tick(10 * time.Minute) {
+				cfgMu.Lock()
+				syncAutostart(&cfg)
+				saveConfig(cfgPath, cfg)
+				cfgMu.Unlock()
+			}
+		}()
 	}
 
 	// Proxy-mode VPN clients set the system proxy instead of adding a tunnel
@@ -127,6 +149,7 @@ func main() {
 	srv := &http.Server{Handler: web.Handler(mon), ReadHeaderTimeout: 5 * time.Second}
 	go srv.Serve(ln)
 	go mon.Run(ctx)
+	go watchdog(mon)
 	log.Printf("vpnrate %s: dashboard at %s, data in %s", version, dashURL, *dataDir)
 
 	if *headless {
@@ -137,14 +160,18 @@ func main() {
 	} else {
 		tray := &ui.Tray{Mon: mon, URL: dashURL, Notify: cfg.Notifications, Autostart: cfg.wantAutostart(),
 			SetAutostart: func(on bool) error {
+				cfgMu.Lock()
+				defer cfgMu.Unlock()
 				cfg.Autostart = &on
 				syncAutostart(&cfg)
 				saveConfig(cfgPath, cfg)
 				return nil
 			}}
 		tray.Run()
+		cfgMu.Lock()
 		cfg.Notifications = tray.Notify
 		saveConfig(cfgPath, cfg)
+		cfgMu.Unlock()
 	}
 	cancel()
 	sctx, scancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -166,6 +193,8 @@ func syncAutostart(cfg *config) {
 	})
 	switch {
 	case register:
+		task, run := ui.AutostartStatus()
+		log.Printf("autostart: entry missing or stale (task=%v run=%v, registered for %q), repairing", task, run, cfg.AutostartPath)
 		how, err := ui.EnableAutostart(exe)
 		if err != nil {
 			log.Printf("autostart: %v", err)
@@ -214,4 +243,44 @@ func probeVia(ctx context.Context, p sysproxy.Proxy) (bool, time.Duration) {
 		return true, time.Since(start)
 	}
 	return false, 0
+}
+
+// watchdog restarts the agent if the monitor loop stops completing ticks,
+// after writing every goroutine's stack to the log so the cause can be
+// found. A wall-clock jump means the PC was asleep, which is not a hang.
+func watchdog(mon *monitor.Monitor) {
+	last := time.Now().Round(0)
+	for range time.Tick(30 * time.Second) {
+		now := time.Now().Round(0)
+		slept := now.Sub(last) > 90*time.Second
+		last = now
+		if slept {
+			continue
+		}
+		if d := mon.SinceBeat(); d > 2*time.Minute {
+			buf := make([]byte, 1<<20)
+			n := runtime.Stack(buf, true)
+			log.Printf("watchdog: monitor stuck for %s, restarting\n%s", d.Round(time.Second), buf[:n])
+			restartSelf()
+		}
+	}
+}
+
+// restartSelf launches a fresh copy with the same flags and exits.
+func restartSelf() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	args := []string{"-autostart", "-restarted"}
+	for _, a := range os.Args[1:] {
+		if a != "-autostart" && a != "-restarted" {
+			args = append(args, a)
+		}
+	}
+	if err := exec.Command(exe, args...).Start(); err != nil {
+		log.Printf("watchdog: restart failed: %v", err)
+		return
+	}
+	os.Exit(3)
 }

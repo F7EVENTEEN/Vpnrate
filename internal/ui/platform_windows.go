@@ -25,25 +25,49 @@ const (
 
 const taskName = "VPN Rate"
 
-// AutostartRegistered reports whether a scheduled task or Run entry exists.
+// Both a logon task and a Run entry are kept: if one is removed (cleanup
+// tools, policies) the other still starts the agent, and a duplicate launch
+// exits quietly thanks to -autostart.
+
+// taskFailed remembers that Task Scheduler refused us in this process, so
+// a Run-only setup isn't re-registered on every check.
+var taskFailed bool
+
+func taskExists() bool { return hidden("schtasks.exe", "/Query", "/TN", taskName).Run() == nil }
+
+// AutostartStatus reports which autostart entries exist.
+func AutostartStatus() (task, run bool) { return taskExists(), runValueExists() }
+
+// AutostartRegistered is true when every entry we maintain is in place.
 func AutostartRegistered() bool {
-	if hidden("schtasks.exe", "/Query", "/TN", taskName).Run() == nil {
-		return true
-	}
-	return runValueExists()
+	task, run := AutostartStatus()
+	return run && (task || taskFailed)
 }
 
-// EnableAutostart registers a logon task for exe; if Task Scheduler refuses,
-// it falls back to the Run key. Only one mechanism is kept, so the agent
-// is never launched twice. It returns which one was used.
+// EnableAutostart (re)creates the logon task and the Run entry for exe and
+// returns which ones are in place.
 func EnableAutostart(exe string) (string, error) {
+	how := "run"
+	if err := createTask(exe); err != nil {
+		if !taskFailed {
+			log.Printf("autostart: scheduled task failed (%v), relying on the Run key", err)
+		}
+		taskFailed = true
+	} else {
+		taskFailed = false
+		how = "task+run"
+	}
+	return how, setRunValue(`"` + exe + `" -autostart`)
+}
+
+func createTask(exe string) error {
 	u, err := user.Current()
 	if err != nil {
-		return "", err
+		return err
 	}
 	f, err := os.CreateTemp("", "vpnrate-task-*.xml")
 	if err != nil {
-		return "", err
+		return err
 	}
 	defer os.Remove(f.Name())
 	// schtasks wants UTF-16 for non-ASCII user names and paths.
@@ -55,13 +79,10 @@ func EnableAutostart(exe string) (string, error) {
 	}
 	f.Write(b)
 	f.Close()
-	if out, err := hidden("schtasks.exe", "/Create", "/TN", taskName, "/XML", f.Name(), "/F").CombinedOutput(); err == nil {
-		setRunValue("")
-		return "task", nil
-	} else {
-		log.Printf("autostart: scheduled task failed (%v: %s), using Run key", err, bytes.TrimSpace(out))
+	if out, err := hidden("schtasks.exe", "/Create", "/TN", taskName, "/XML", f.Name(), "/F").CombinedOutput(); err != nil {
+		return fmt.Errorf("%v: %s", err, bytes.TrimSpace(out))
 	}
-	return "run", setRunValue(`"` + exe + `" -autostart`)
+	return nil
 }
 
 func DisableAutostart() error {

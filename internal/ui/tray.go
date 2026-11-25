@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"log"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -61,6 +62,7 @@ func (t *Tray) ready() {
 	systray.SetOnTapped(func() { OpenURL(t.URL) })
 
 	t.Mon.Subscribe(t.onEvent)
+	go keepTrayIcon(make(chan struct{}))
 
 	update := func() {
 		s := t.Mon.Status()
@@ -96,6 +98,7 @@ func (t *Tray) ready() {
 		systray.SetTooltip(fmt.Sprintf("VPN Rate — %s\nIP %s%s\nTrust %d · Stability %d", state, ip, where, s.Trust.Score, s.Stability.Score))
 	}
 	go func() {
+		defer recoverLog("tray update")
 		update()
 		tk := time.NewTicker(5 * time.Second)
 		for range tk.C {
@@ -104,6 +107,7 @@ func (t *Tray) ready() {
 	}()
 
 	go func() {
+		defer recoverLog("tray menu")
 		for {
 			select {
 			case <-mOpen.ClickedCh:
@@ -173,5 +177,11 @@ func (t *Tray) toast(key, title, msg string) {
 	t.lastToast[key] = time.Now()
 	if err := Notify(title, msg); err != nil {
 		log.Printf("notify: %v", err)
+	}
+}
+
+func recoverLog(where string) {
+	if r := recover(); r != nil {
+		log.Printf("%s panicked: %v\n%s", where, r, debug.Stack())
 	}
 }

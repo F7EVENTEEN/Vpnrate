@@ -5,6 +5,7 @@ package monitor
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/netip"
 	"slices"
 	"sync"
@@ -85,8 +86,9 @@ type Monitor struct {
 	minutes   []store.MinuteSample
 	recent    []store.Event // last 24h, for counters
 	st        Status
-	tunnelsOK bool // tunnels observed at least once
-	warm      bool // network seen at least once since launch
+	tunnelsOK bool      // tunnels observed at least once
+	warm      bool      // network seen at least once since launch
+	beat      time.Time // last completed Tick
 	lastFull  time.Time
 	leaking   map[string]bool
 	webrtcIPs []netip.Addr
@@ -109,6 +111,7 @@ func New(d Deps, st *store.Store) *Monitor {
 	}
 	m.st.Starting = true
 	m.st.Started = d.Now()
+	m.beat = d.Now()
 	m.st.Trust = score.ComputeTrust(score.TrustInput{})
 	m.loadHistory()
 	return m
@@ -155,8 +158,8 @@ func (m *Monitor) emit(evs []store.Event) {
 func (m *Monitor) Run(ctx context.Context) {
 	m.emit([]store.Event{{Time: m.d.Now(), Kind: store.KindStarted, Message: "agent started"}})
 	m.store.Prune(m.d.Now(), Retention)
-	m.Tick(ctx)
-	m.CheckIP(ctx)
+	m.step("tick", func() { m.Tick(ctx) })
+	m.step("check_ip", func() { m.CheckIP(ctx) })
 
 	probeT := time.NewTicker(ProbeInterval)
 	ipT := time.NewTicker(IPInterval)
@@ -170,12 +173,12 @@ func (m *Monitor) Run(ctx context.Context) {
 			m.flush()
 			return
 		case <-probeT.C:
-			m.Tick(ctx)
+			m.step("tick", func() { m.Tick(ctx) })
 		case <-ipT.C:
-			m.CheckIP(ctx)
+			m.step("check_ip", func() { m.CheckIP(ctx) })
 		case <-m.recheck:
 			m.forceFull()
-			m.CheckIP(ctx)
+			m.step("check_ip", func() { m.CheckIP(ctx) })
 		case <-pruneT.C:
 			m.store.Prune(m.d.Now(), Retention)
 		}
@@ -199,10 +202,13 @@ func (m *Monitor) forceFull() {
 // Tick runs one connectivity probe and one tunnel scan.
 func (m *Monitor) Tick(ctx context.Context) {
 	ok, lat := m.d.Probe(ctx)
-	tunnels, terr := m.d.Tunnels()
-	proxy := ""
+	tunnels, terr := withTimeout(m.d.Tunnels)
+	if terr == errDepTimeout {
+		log.Printf("monitor: adapter scan timed out, keeping last known tunnels")
+	}
+	proxy, perr := "", error(nil)
 	if m.d.Proxy != nil {
-		proxy = m.d.Proxy()
+		proxy, perr = withTimeout(func() (string, error) { return m.d.Proxy(), nil })
 	}
 	now := m.d.Now()
 
@@ -224,6 +230,9 @@ func (m *Monitor) Tick(ctx context.Context) {
 	}
 
 	if terr == nil {
+		if perr != nil {
+			proxy = m.st.Proxy
+		}
 		// A route is either a tunnel adapter or a system proxy (proxy-mode clients).
 		active := len(tunnels) > 0 || proxy != ""
 		if m.tunnelsOK && active != m.st.VPNActive {
@@ -243,6 +252,7 @@ func (m *Monitor) Tick(ctx context.Context) {
 		m.st.Tunnels = tunnels
 		m.st.Proxy = proxy
 	}
+	m.beat = now
 	m.mu.Unlock()
 
 	m.emit(evs)
